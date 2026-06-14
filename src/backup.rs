@@ -157,6 +157,40 @@ fn create_tar_zst(source: &Path, output: &Path, world_only: bool) -> Result<u64,
     Ok(size)
 }
 
+pub fn delete_backup(instance_id: &str, filename: &str) -> Result<(), String> {
+    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+        return Err("Invalid backup filename".to_string());
+    }
+    let path = backup_dir(instance_id).join(filename);
+    if !path.exists() {
+        return Err("Backup not found".to_string());
+    }
+    fs::remove_file(&path).map_err(|e| format!("Failed to delete backup: {}", e))
+}
+
+pub fn backup_path(instance_id: &str, filename: &str) -> Result<PathBuf, String> {
+    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+        return Err("Invalid backup filename".to_string());
+    }
+    let path = backup_dir(instance_id).join(filename);
+    if !path.exists() {
+        return Err("Backup not found".to_string());
+    }
+    Ok(path)
+}
+
+pub async fn copy_backup(src_instance: &str, filename: &str, dst_instance: &str) -> Result<(), String> {
+    let src = backup_path(src_instance, filename)?;
+    let dst_dir = backup_dir(dst_instance);
+    tokio::fs::create_dir_all(&dst_dir)
+        .await
+        .map_err(|e| format!("Failed to create backup dir: {}", e))?;
+    tokio::fs::copy(&src, dst_dir.join(filename))
+        .await
+        .map_err(|e| format!("Failed to copy backup: {}", e))?;
+    Ok(())
+}
+
 fn apply_retention(instance_id: &str, keep_count: usize) {
     let backups = list_backups(instance_id);
     if backups.len() > keep_count {

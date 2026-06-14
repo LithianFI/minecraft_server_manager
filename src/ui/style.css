@@ -411,11 +411,48 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 
 .backup-meta { font-size: 11px; color: var(--text-muted); }
 
-.btn-restore {
-  padding: 5px 13px;
-  font-size: 12px;
+.backup-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   flex-shrink: 0;
 }
+
+.backup-copy-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.backup-copy-select {
+  font-size: 11px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px 6px;
+  cursor: pointer;
+  max-width: 130px;
+}
+
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background .15s, color .15s, border-color .15s;
+  flex-shrink: 0;
+}
+.btn-icon:hover { background: rgba(255,255,255,.08); color: var(--text); border-color: rgba(255,255,255,.2); }
+.btn-icon.btn-danger:hover { background: rgba(239,68,68,.15); color: #f87171; border-color: rgba(239,68,68,.4); }
 
 /* ── Mod panel ──────────────────────────────────────────────── */
 .mods-toolbar {

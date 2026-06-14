@@ -222,6 +222,67 @@ pub async fn restore_backup(
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))
 }
 
+pub async fn delete_backup(
+    State(state): State<Arc<AppState>>,
+    Path((id, filename)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let exists = state.instances.read().await.contains_key(&id);
+    if !exists {
+        return Err(err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)));
+    }
+    backup::delete_backup(&id, &filename)
+        .map(|_| StatusCode::NO_CONTENT)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))
+}
+
+pub async fn download_backup(
+    State(state): State<Arc<AppState>>,
+    Path((id, filename)): Path<(String, String)>,
+) -> Result<impl axum::response::IntoResponse, (StatusCode, String)> {
+    let exists = state.instances.read().await.contains_key(&id);
+    if !exists {
+        return Err((StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)));
+    }
+    let path = backup::backup_path(&id, &filename)
+        .map_err(|e| (StatusCode::NOT_FOUND, e))?;
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let disposition = format!("attachment; filename=\"{}\"", filename);
+    Ok((
+        [
+            ("content-type", "application/octet-stream".to_string()),
+            ("content-disposition", disposition),
+        ],
+        bytes,
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct CopyBackupRequest {
+    pub target_instance_id: String,
+}
+
+pub async fn copy_backup(
+    State(state): State<Arc<AppState>>,
+    Path((id, filename)): Path<(String, String)>,
+    Json(req): Json<CopyBackupRequest>,
+) -> ApiResult<StatusCode> {
+    {
+        let instances = state.instances.read().await;
+        if !instances.contains_key(&id) {
+            return Err(err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)));
+        }
+        if !instances.contains_key(&req.target_instance_id) {
+            return Err(err(StatusCode::NOT_FOUND, format!("Target instance '{}' not found", req.target_instance_id)));
+        }
+    }
+    backup::copy_backup(&id, &filename, &req.target_instance_id)
+        .await
+        .map(|_| StatusCode::NO_CONTENT)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))
+}
+
 // ── Mod handlers ──────────────────────────────────────────────────────────────
 
 pub async fn list_mods(

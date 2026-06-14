@@ -504,13 +504,66 @@ function renderBackups() {
 
 function backupRowHTML(b) {
   const name = esc(b.filename)
-  return `<div class="backup-row">
+  const enc  = encodeURIComponent(b.filename)
+  const otherInstances = [...instances.values()].filter(i => i.id !== detailId)
+  const copyOpts = otherInstances.length
+    ? otherInstances.map(i => `<option value="${esc(i.id)}">${esc(i.display_name)}</option>`).join('')
+    : ''
+  const copyControl = otherInstances.length
+    ? `<span class="backup-copy-wrap">
+        <select class="backup-copy-select" id="copy-sel-${enc}">
+          <option value="">Copy to…</option>
+          ${copyOpts}
+        </select>
+        <button class="btn-icon" title="Copy" onclick="doCopyBackup('${name}', '${enc}')">⧉</button>
+      </span>`
+    : ''
+  return `<div class="backup-row" id="backup-row-${enc}">
     <div class="backup-info">
       <span class="backup-filename">${name}</span>
       <span class="backup-meta">${fmtSize(b.size_bytes)} &middot; ${fmtDate(b.created_at)}</span>
     </div>
-    <button class="btn-outline btn-restore" onclick="doRestore('${name}')">Restore</button>
+    <div class="backup-actions">
+      ${copyControl}
+      <a class="btn-icon" title="Download" href="/api/instances/${esc(detailId)}/backups/${enc}/download" download="${name}">⬇</a>
+      <button class="btn-icon btn-restore" title="Restore" onclick="doRestore('${name}')">↺</button>
+      <button class="btn-icon btn-danger" title="Delete" onclick="doDeleteBackup('${name}', '${enc}')">✕</button>
+    </div>
   </div>`
+}
+
+async function doDeleteBackup(filename, enc) {
+  if (!detailId) return
+  if (!confirm(`Delete backup "${filename}"?\n\nThis cannot be undone.`)) return
+  const row = document.getElementById('backup-row-' + enc)
+  if (row) row.style.opacity = '0.4'
+  try {
+    await api('DELETE', `/api/instances/${detailId}/backups/${enc}`)
+    if (row) row.remove()
+    const list = backups.get(detailId) ?? []
+    backups.set(detailId, list.filter(b => b.filename !== filename))
+    if ((backups.get(detailId) ?? []).length === 0) renderBackups()
+  } catch (e) {
+    if (row) row.style.opacity = ''
+    setBackupMsg('Delete failed: ' + e.message, 'error')
+  }
+}
+
+async function doCopyBackup(filename, enc) {
+  if (!detailId) return
+  const sel = document.getElementById('copy-sel-' + enc)
+  const target = sel?.value
+  if (!target) return
+  const targetName = instances.get(target)?.display_name ?? target
+  if (!confirm(`Copy "${filename}" to "${targetName}"?`)) { sel.value = ''; return }
+  try {
+    await api('POST', `/api/instances/${detailId}/backups/${enc}/copy`, { target_instance_id: target })
+    sel.value = ''
+    setBackupMsg(`Copied to ${targetName}.`, 'success')
+  } catch (e) {
+    sel.value = ''
+    setBackupMsg('Copy failed: ' + e.message, 'error')
+  }
 }
 
 async function doCreateBackup() {
