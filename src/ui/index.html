@@ -71,7 +71,13 @@
     </form>
   </div>
   <div id="tab-mods" class="tab-panel hidden">
-    <div class="placeholder">Mod management coming in Phase 3.</div>
+    <div class="mods-toolbar">
+      <button class="btn-outline" id="btn-scan-mods" onclick="doScanMods()">⟳ Scan Mods</button>
+      <button class="btn-outline" id="btn-check-updates" onclick="doCheckUpdates()" disabled>↑ Check Updates</button>
+      <button class="btn-primary" id="btn-update-all" onclick="doUpdateAll()" disabled>Update All</button>
+      <span id="mods-status-msg" class="mods-msg hidden"></span>
+    </div>
+    <div id="mod-list"></div>
   </div>
   <div id="tab-backups" class="tab-panel hidden">
     <div class="backup-toolbar">

@@ -417,6 +417,104 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   flex-shrink: 0;
 }
 
+/* ── Mod panel ──────────────────────────────────────────────── */
+.mods-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--surface);
+}
+
+.mods-toolbar .btn-primary { padding: 6px 16px; font-size: 13px; }
+.mods-toolbar .btn-outline  { padding: 6px 14px; font-size: 13px; }
+
+.mods-msg { font-size: 12px; color: var(--text-dim); }
+.mods-msg.success { color: var(--green); }
+.mods-msg.error   { color: var(--red); }
+
+#mod-list { flex: 1; overflow-y: auto; }
+
+.mod-row {
+  display: flex;
+  align-items: center;
+  padding: 11px 20px 11px 17px;
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid transparent;
+  gap: 12px;
+  transition: background .12s, border-left-color .12s;
+}
+
+.mod-row:hover { background: rgba(255,255,255,.022); }
+.mod-row.has-update  { border-left-color: var(--blue); }
+.mod-row.up-to-date  { border-left-color: var(--green); }
+
+.mod-name {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 500;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mod-version-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.mod-version {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.mod-arrow { font-size: 11px; color: var(--text-muted); }
+
+.mod-new-version {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--blue);
+  font-weight: 500;
+}
+
+.mod-uptodate {
+  font-size: 12px;
+  color: var(--green);
+}
+
+.btn-mod-update {
+  padding: 4px 12px;
+  font-size: 12px;
+  flex-shrink: 0;
+  color: var(--blue);
+  border-color: rgba(59,130,246,.35);
+}
+.btn-mod-update:hover { background: rgba(59,130,246,.1); border-color: rgba(59,130,246,.6); }
+
+.mods-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 60%;
+  gap: 8px;
+  color: var(--text-dim);
+  text-align: center;
+  padding: 40px;
+}
+
+.mods-empty p { font-size: 14px; }
+.mods-empty-hint { font-size: 12px; color: var(--text-muted); }
+.mods-empty-hint strong { color: var(--text-dim); }
+.mods-empty-hint code { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+
 /* ── Modal ──────────────────────────────────────────────────── */
 .modal-backdrop {
   position: fixed; inset: 0;

@@ -1,9 +1,10 @@
 // ─── State ───────────────────────────────────────────────────────────────────
-const instances = new Map()   // id → InstanceInfo
-const logs      = new Map()   // id → [{line, timestamp}]
-const backups   = new Map()   // id → [BackupInfo]
-let   detailId  = null
-let   logPinned = true
+const instances  = new Map()   // id → InstanceInfo
+const logs       = new Map()   // id → [{line, timestamp}]
+const backups    = new Map()   // id → [BackupInfo]
+const modsData   = new Map()   // id → { mods: [], updates: null }
+let   detailId   = null
+let   logPinned  = true
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', setupSSE)
@@ -95,6 +96,7 @@ function showDetail(id) {
   switchTab('logs')
   renderLogs()
   loadBackups(id)
+  loadMods(id)
 }
 
 function showDashboard() {
@@ -249,6 +251,7 @@ function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name))
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('hidden', p.id !== 'tab-' + name))
   if (name === 'backups' && detailId) renderBackups()
+  if (name === 'mods' && detailId) renderMods()
 }
 
 // ─── Log view ─────────────────────────────────────────────────────────────────
@@ -423,6 +426,164 @@ function setBackupMsg(text, type) {
   if (_backupMsgTimer) clearTimeout(_backupMsgTimer)
   if (type === 'success') {
     _backupMsgTimer = setTimeout(() => el.classList.add('hidden'), 8000)
+  }
+}
+
+// ─── Mods ─────────────────────────────────────────────────────────────────────
+async function loadMods(id) {
+  try {
+    const mods = await api('GET', `/api/instances/${id}/mods`)
+    modsData.set(id, { mods: mods ?? [], updates: modsData.get(id)?.updates ?? null })
+    if (detailId === id) renderMods()
+  } catch { /* silent */ }
+}
+
+function renderMods() {
+  const data = detailId ? (modsData.get(detailId) ?? null) : null
+  const container = document.getElementById('mod-list')
+  if (!container) return
+
+  const btnCheck = document.getElementById('btn-check-updates')
+  const btnAll   = document.getElementById('btn-update-all')
+
+  if (data === null) {
+    container.innerHTML = '<div class="placeholder">Loading…</div>'
+    return
+  }
+
+  const { mods, updates } = data
+  const updateMap = updates ? Object.fromEntries(updates.map(u => [u.project_id, u])) : null
+
+  if (mods.length === 0) {
+    container.innerHTML = `<div class="mods-empty">
+      <p>No mods found in the lock file.</p>
+      <p class="mods-empty-hint">Click <strong>Scan Mods</strong> to detect mods from the server's <code>mods/</code> directory.</p>
+    </div>`
+    btnCheck.disabled = true
+    btnAll.disabled   = true
+    return
+  }
+
+  btnCheck.disabled = false
+  const updateCount = updates ? updates.length : 0
+  btnAll.disabled   = updateCount === 0
+  btnAll.textContent = updateCount > 0 ? `Update All (${updateCount})` : 'Update All'
+
+  container.innerHTML = mods.map(m => modRowHTML(m, updateMap ? updateMap[m.modrinth_project_id] : null)).join('')
+}
+
+function modRowHTML(mod, update) {
+  const hasUpdate = !!update
+  const statusClass = update === undefined ? '' : (hasUpdate ? 'has-update' : 'up-to-date')
+  let versionCol = ''
+
+  if (update === undefined) {
+    // updates not yet checked
+    versionCol = `<span class="mod-version">${esc(mod.version_number)}</span>`
+  } else if (hasUpdate) {
+    versionCol = `
+      <span class="mod-version">${esc(mod.version_number)}</span>
+      <span class="mod-arrow">→</span>
+      <span class="mod-new-version">${esc(update.latest_version_number)}</span>`
+  } else {
+    versionCol = `
+      <span class="mod-version">${esc(mod.version_number)}</span>
+      <span class="mod-uptodate">✓</span>`
+  }
+
+  const updateBtn = hasUpdate
+    ? `<button class="btn-outline btn-mod-update" onclick="doUpdateMod('${esc(mod.modrinth_project_id)}', this)">Update</button>`
+    : ''
+
+  return `<div class="mod-row ${statusClass}">
+    <div class="mod-name">${esc(mod.name)}</div>
+    <div class="mod-version-cell">${versionCol}</div>
+    ${updateBtn}
+  </div>`
+}
+
+async function doScanMods() {
+  if (!detailId) return
+  const btn = document.getElementById('btn-scan-mods')
+  btn.disabled = true
+  setModsMsg('Scanning mods directory…', '')
+  try {
+    const mods = await api('POST', `/api/instances/${detailId}/mods`)
+    modsData.set(detailId, { mods: mods ?? [], updates: null })
+    renderMods()
+    setModsMsg(`Found ${mods.length} mod${mods.length !== 1 ? 's' : ''} on Modrinth.`, 'success')
+  } catch (e) {
+    setModsMsg('Scan failed: ' + e.message, 'error')
+  } finally {
+    btn.disabled = false
+  }
+}
+
+async function doCheckUpdates() {
+  if (!detailId) return
+  const btn = document.getElementById('btn-check-updates')
+  btn.disabled = true
+  setModsMsg('Checking Modrinth for updates…', '')
+  try {
+    const updates = await api('GET', `/api/instances/${detailId}/mods/updates`)
+    const data = modsData.get(detailId) ?? { mods: [], updates: null }
+    modsData.set(detailId, { ...data, updates: updates ?? [] })
+    renderMods()
+    const n = (updates ?? []).length
+    setModsMsg(n > 0 ? `${n} update${n !== 1 ? 's' : ''} available.` : 'All mods are up to date.', n > 0 ? '' : 'success')
+  } catch (e) {
+    setModsMsg('Update check failed: ' + e.message, 'error')
+  } finally {
+    btn.disabled = false
+  }
+}
+
+async function doUpdateMod(projectId, btnEl) {
+  if (!detailId) return
+  btnEl.disabled = true
+  setModsMsg('Updating mod…', '')
+  try {
+    await api('POST', `/api/instances/${detailId}/mods/${encodeURIComponent(projectId)}/update`)
+    // Re-fetch mods and clear updates so user runs check again for fresh state
+    const mods = await api('GET', `/api/instances/${detailId}/mods`)
+    const data = modsData.get(detailId)
+    const newUpdates = data?.updates?.filter(u => u.project_id !== projectId) ?? null
+    modsData.set(detailId, { mods: mods ?? [], updates: newUpdates })
+    renderMods()
+    setModsMsg('Mod updated.', 'success')
+  } catch (e) {
+    setModsMsg('Update failed: ' + e.message, 'error')
+    btnEl.disabled = false
+  }
+}
+
+async function doUpdateAll() {
+  if (!detailId) return
+  const btn = document.getElementById('btn-update-all')
+  btn.disabled = true
+  setModsMsg('Updating all mods…', '')
+  try {
+    await api('POST', `/api/instances/${detailId}/mods/update-all`)
+    const mods = await api('GET', `/api/instances/${detailId}/mods`)
+    modsData.set(detailId, { mods: mods ?? [], updates: [] })
+    renderMods()
+    setModsMsg('All mods updated.', 'success')
+  } catch (e) {
+    setModsMsg('Update failed: ' + e.message, 'error')
+    btn.disabled = false
+  }
+}
+
+let _modsMsgTimer = null
+function setModsMsg(text, type) {
+  const el = document.getElementById('mods-status-msg')
+  if (!el) return
+  el.textContent = text
+  el.className = 'mods-msg' + (type ? ' ' + type : '')
+  el.classList.remove('hidden')
+  if (_modsMsgTimer) clearTimeout(_modsMsgTimer)
+  if (type === 'success') {
+    _modsMsgTimer = setTimeout(() => el.classList.add('hidden'), 8000)
   }
 }
 

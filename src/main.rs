@@ -1,7 +1,9 @@
 mod api;
 mod backup;
 mod config;
+mod discord;
 mod instance;
+mod mod_mgr;
 mod sse;
 mod state;
 
@@ -52,6 +54,7 @@ async fn main() {
         processes: Mutex::new(Default::default()),
         log_tx,
         global_config,
+        http_client: reqwest::Client::new(),
     });
 
     let port = state
@@ -77,6 +80,10 @@ async fn main() {
         .route("/api/instances/{id}/cmd", post(api::send_command))
         .route("/api/instances/{id}/backups", get(api::list_backups).post(api::create_backup))
         .route("/api/instances/{id}/backups/{filename}/restore", post(api::restore_backup))
+        .route("/api/instances/{id}/mods", get(api::list_mods).post(api::scan_mods))
+        .route("/api/instances/{id}/mods/updates", get(api::get_mod_updates))
+        .route("/api/instances/{id}/mods/update-all", post(api::update_all_mods))
+        .route("/api/instances/{id}/mods/{project_id}/update", post(api::update_single_mod))
         .with_state(state.clone())
         .layer(CorsLayer::permissive());
 
@@ -84,6 +91,10 @@ async fn main() {
     tracing::info!("Listening on http://localhost:{}", port);
 
     backup::start_schedulers(state.clone());
+
+    if let Some(discord_cfg) = state.global_config.discord.clone() {
+        discord::start_bot(state.clone(), discord_cfg);
+    }
 
     tokio::spawn(async move {
         tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;

@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     backup::{self, BackupInfo},
     config::{data_dir, BackupConfig, InstanceConfig, InstanceMeta, ServerConfig},
-    instance,
+    instance, mod_mgr,
+    mod_mgr::{ModEntry, ModUpdate},
     state::{AppState, InstanceInfo, InstanceState, InstanceStatus, LogLine},
 };
 
@@ -209,6 +210,121 @@ pub async fn restore_backup(
         .await
         .map(|_| StatusCode::NO_CONTENT)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))
+}
+
+// ── Mod handlers ──────────────────────────────────────────────────────────────
+
+pub async fn list_mods(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<ModEntry>>> {
+    let instances = state.instances.read().await;
+    let inst = instances
+        .get(&id)
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+    Ok(Json(mod_mgr::read_lock(&inst.instance_dir).mods))
+}
+
+pub async fn scan_mods(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<ModEntry>>> {
+    let (server_path, instance_dir) = {
+        let instances = state.instances.read().await;
+        let inst = instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+        (inst.config.server.path.clone(), inst.instance_dir.clone())
+    };
+    let lock = mod_mgr::scan_mods(&state.http_client, &server_path, &instance_dir)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(lock.mods))
+}
+
+pub async fn get_mod_updates(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<ModUpdate>>> {
+    let (instance_dir, mc_version, loader) = {
+        let instances = state.instances.read().await;
+        let inst = instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+        (
+            inst.instance_dir.clone(),
+            inst.config.instance.minecraft_version.clone(),
+            inst.config.instance.loader.clone().unwrap_or_else(|| "neoforge".to_string()),
+        )
+    };
+    let lock = mod_mgr::read_lock(&instance_dir);
+    let updates = mod_mgr::check_updates(&state.http_client, &lock, &mc_version, &loader)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(updates))
+}
+
+pub async fn update_single_mod(
+    State(state): State<Arc<AppState>>,
+    Path((id, project_id)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let (server_path, instance_dir, mc_version, loader) = {
+        let instances = state.instances.read().await;
+        let inst = instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+        (
+            inst.config.server.path.clone(),
+            inst.instance_dir.clone(),
+            inst.config.instance.minecraft_version.clone(),
+            inst.config.instance.loader.clone().unwrap_or_else(|| "neoforge".to_string()),
+        )
+    };
+    let mut lock = mod_mgr::read_lock(&instance_dir);
+    let updates = mod_mgr::check_updates(&state.http_client, &lock, &mc_version, &loader)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let update = updates
+        .iter()
+        .find(|u| u.project_id == project_id)
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "No update available for this mod"))?
+        .clone();
+    mod_mgr::apply_update(&state.http_client, &update, &server_path, &mut lock)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    mod_mgr::write_lock(&instance_dir, &lock)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn update_all_mods(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    let (server_path, instance_dir, mc_version, loader) = {
+        let instances = state.instances.read().await;
+        let inst = instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+        (
+            inst.config.server.path.clone(),
+            inst.instance_dir.clone(),
+            inst.config.instance.minecraft_version.clone(),
+            inst.config.instance.loader.clone().unwrap_or_else(|| "neoforge".to_string()),
+        )
+    };
+    let mut lock = mod_mgr::read_lock(&instance_dir);
+    let updates = mod_mgr::check_updates(&state.http_client, &lock, &mc_version, &loader)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    for update in &updates {
+        mod_mgr::apply_update(&state.http_client, update, &server_path, &mut lock)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("{}: {}", update.name, e)))?;
+    }
+    mod_mgr::write_lock(&instance_dir, &lock)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn slugify(s: &str) -> String {
