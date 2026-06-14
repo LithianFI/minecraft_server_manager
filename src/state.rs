@@ -84,6 +84,15 @@ pub enum WsEvent {
         instance_id: String,
         player: String,
     },
+    BackupDone {
+        instance_id: String,
+        filename: String,
+        size_bytes: u64,
+    },
+    BackupFailed {
+        instance_id: String,
+        error: String,
+    },
 }
 
 pub struct ProcessHandle {

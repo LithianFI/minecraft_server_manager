@@ -8,6 +8,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    backup::{self, BackupInfo},
     config::{data_dir, BackupConfig, InstanceConfig, InstanceMeta, ServerConfig},
     instance,
     state::{AppState, InstanceInfo, InstanceState, InstanceStatus, LogLine},
@@ -175,6 +176,39 @@ pub async fn add_instance(
     }
 
     Ok(Json(info))
+}
+
+pub async fn list_backups(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<BackupInfo>>> {
+    let exists = state.instances.read().await.contains_key(&id);
+    if !exists {
+        return Err(err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)));
+    }
+    Ok(Json(backup::list_backups(&id)))
+}
+
+pub async fn create_backup(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    let exists = state.instances.read().await.contains_key(&id);
+    if !exists {
+        return Err(err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)));
+    }
+    tokio::spawn(backup::trigger_backup(state, id));
+    Ok(StatusCode::ACCEPTED)
+}
+
+pub async fn restore_backup(
+    State(state): State<Arc<AppState>>,
+    Path((id, filename)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    backup::restore_backup(&state, &id, &filename)
+        .await
+        .map(|_| StatusCode::NO_CONTENT)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))
 }
 
 fn slugify(s: &str) -> String {

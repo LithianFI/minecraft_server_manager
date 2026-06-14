@@ -16,3 +16,6 @@ open = "5"
 futures-util = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
+tar = "0.4"
+zstd = "0.13"
+cron = "0.12"

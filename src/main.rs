@@ -1,4 +1,5 @@
 mod api;
+mod backup;
 mod config;
 mod instance;
 mod sse;
@@ -74,11 +75,15 @@ async fn main() {
         .route("/api/instances/{id}/stop", post(api::stop_instance))
         .route("/api/instances/{id}/switch", post(api::switch_instance))
         .route("/api/instances/{id}/cmd", post(api::send_command))
-        .with_state(state)
+        .route("/api/instances/{id}/backups", get(api::list_backups).post(api::create_backup))
+        .route("/api/instances/{id}/backups/{filename}/restore", post(api::restore_backup))
+        .with_state(state.clone())
         .layer(CorsLayer::permissive());
 
     let addr = format!("0.0.0.0:{}", port);
     tracing::info!("Listening on http://localhost:{}", port);
+
+    backup::start_schedulers(state.clone());
 
     tokio::spawn(async move {
         tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;

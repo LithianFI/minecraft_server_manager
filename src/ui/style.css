@@ -368,6 +368,55 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   height: 100%; color: var(--text-muted); font-size: 14px;
 }
 
+/* ── Backup panel ────────────────────────────────────────────── */
+.backup-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--surface);
+}
+
+.backup-toolbar .btn-primary { padding: 6px 16px; font-size: 13px; }
+
+.backup-msg { font-size: 12px; color: var(--text-dim); }
+.backup-msg.success { color: var(--green); }
+.backup-msg.error   { color: var(--red); }
+
+#backup-list { flex: 1; overflow-y: auto; }
+
+.backup-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 20px;
+  border-bottom: 1px solid var(--border);
+  gap: 16px;
+}
+
+.backup-row:hover { background: rgba(255,255,255,.025); }
+
+.backup-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+
+.backup-filename {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.backup-meta { font-size: 11px; color: var(--text-muted); }
+
+.btn-restore {
+  padding: 5px 13px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
 /* ── Modal ──────────────────────────────────────────────────── */
 .modal-backdrop {
   position: fixed; inset: 0;

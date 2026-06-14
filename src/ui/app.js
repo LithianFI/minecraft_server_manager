@@ -1,6 +1,7 @@
 // ─── State ───────────────────────────────────────────────────────────────────
 const instances = new Map()   // id → InstanceInfo
 const logs      = new Map()   // id → [{line, timestamp}]
+const backups   = new Map()   // id → [BackupInfo]
 let   detailId  = null
 let   logPinned = true
 
@@ -65,6 +66,19 @@ function handleEvent(ev) {
       if (detailId === ev.instance_id) refreshPlayerBar(inst)
       break
     }
+
+    case 'backup_done': {
+      setBackupMsg(`Backup created (${fmtSize(ev.size_bytes)})`, 'success')
+      document.getElementById('btn-create-backup').disabled = false
+      if (ev.instance_id === detailId) loadBackups(detailId)
+      break
+    }
+
+    case 'backup_failed': {
+      setBackupMsg(`Backup failed: ${ev.error}`, 'error')
+      document.getElementById('btn-create-backup').disabled = false
+      break
+    }
   }
 }
 
@@ -80,6 +94,7 @@ function showDetail(id) {
   refreshDetail(inst)
   switchTab('logs')
   renderLogs()
+  loadBackups(id)
 }
 
 function showDashboard() {
@@ -233,6 +248,7 @@ function setDetailError(msg) {
 function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name))
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('hidden', p.id !== 'tab-' + name))
+  if (name === 'backups' && detailId) renderBackups()
 }
 
 // ─── Log view ─────────────────────────────────────────────────────────────────
@@ -332,6 +348,84 @@ async function submitAdd(e) {
   }
 }
 
+// ─── Backups ──────────────────────────────────────────────────────────────────
+async function loadBackups(id) {
+  try {
+    const list = await api('GET', `/api/instances/${id}/backups`)
+    backups.set(id, list)
+    if (detailId === id) renderBackups()
+  } catch { /* silent — instance may not exist yet */ }
+}
+
+function renderBackups() {
+  const list = detailId ? (backups.get(detailId) ?? null) : null
+  const container = document.getElementById('backup-list')
+  if (!container) return
+
+  if (list === null) {
+    container.innerHTML = '<div class="placeholder">Loading…</div>'
+    return
+  }
+  if (list.length === 0) {
+    container.innerHTML = '<div class="placeholder">No backups yet.</div>'
+    return
+  }
+  container.innerHTML = list.map(b => backupRowHTML(b)).join('')
+}
+
+function backupRowHTML(b) {
+  const name = esc(b.filename)
+  return `<div class="backup-row">
+    <div class="backup-info">
+      <span class="backup-filename">${name}</span>
+      <span class="backup-meta">${fmtSize(b.size_bytes)} &middot; ${fmtDate(b.created_at)}</span>
+    </div>
+    <button class="btn-outline btn-restore" onclick="doRestore('${name}')">Restore</button>
+  </div>`
+}
+
+async function doCreateBackup() {
+  if (!detailId) return
+  const btn = document.getElementById('btn-create-backup')
+  btn.disabled = true
+  setBackupMsg('Backup in progress…', '')
+  try {
+    await api('POST', `/api/instances/${detailId}/backups`)
+    // BackupDone SSE event will re-enable the button and update the list
+  } catch (e) {
+    setBackupMsg('Backup failed: ' + e.message, 'error')
+    btn.disabled = false
+  }
+}
+
+async function doRestore(filename) {
+  if (!detailId) return
+  if (!confirm(`Restore "${filename}"?\n\nThis overwrites all server files with the backup contents. The instance must be stopped first.`)) return
+  const btns = document.querySelectorAll('.btn-restore')
+  btns.forEach(b => b.disabled = true)
+  try {
+    await api('POST', `/api/instances/${detailId}/backups/${encodeURIComponent(filename)}/restore`)
+    setBackupMsg('Restore complete.', 'success')
+  } catch (e) {
+    setBackupMsg('Restore failed: ' + e.message, 'error')
+  } finally {
+    btns.forEach(b => b.disabled = false)
+  }
+}
+
+let _backupMsgTimer = null
+function setBackupMsg(text, type) {
+  const el = document.getElementById('backup-status-msg')
+  if (!el) return
+  el.textContent = text
+  el.className = 'backup-msg' + (type ? ' ' + type : '')
+  el.classList.remove('hidden')
+  if (_backupMsgTimer) clearTimeout(_backupMsgTimer)
+  if (type === 'success') {
+    _backupMsgTimer = setTimeout(() => el.classList.add('hidden'), 8000)
+  }
+}
+
 // ─── Action helpers ───────────────────────────────────────────────────────────
 async function doStart(id) {
   try {
@@ -399,4 +493,15 @@ function esc(str) {
 
 function slugify(s) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+}
+
+function fmtSize(bytes) {
+  if (bytes >= 1_073_741_824) return (bytes / 1_073_741_824).toFixed(1) + ' GB'
+  if (bytes >= 1_048_576)     return (bytes / 1_048_576).toFixed(1) + ' MB'
+  if (bytes >= 1_024)         return Math.round(bytes / 1_024) + ' KB'
+  return bytes + ' B'
+}
+
+function fmtDate(ts) {
+  return new Date(ts * 1000).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })
 }

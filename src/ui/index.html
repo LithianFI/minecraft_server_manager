@@ -74,7 +74,11 @@
     <div class="placeholder">Mod management coming in Phase 3.</div>
   </div>
   <div id="tab-backups" class="tab-panel hidden">
-    <div class="placeholder">Backup management coming in Phase 2.</div>
+    <div class="backup-toolbar">
+      <button class="btn-primary" id="btn-create-backup" onclick="doCreateBackup()">Create Backup</button>
+      <span id="backup-status-msg" class="backup-msg hidden"></span>
+    </div>
+    <div id="backup-list"></div>
   </div>
 </div>
 
