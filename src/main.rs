@@ -106,6 +106,8 @@ async fn main() {
         .route("/api/instances/{id}/restart-config", post(api::update_restart_config))
         .route("/api/setup/install-neoforge", post(api::install_neoforge))
         .route("/api/setup/import-modpack", post(api::import_modpack))
+        .route("/api/java/installs", get(api::get_java_installs))
+        .route("/api/instances/{id}/java-config", post(api::set_java_config))
         .route("/api/ftb/search", get(api::ftb_search))
         .route("/api/setup/import-ftb", post(api::import_ftb_pack))
         .with_state(state.clone())

@@ -1474,6 +1474,7 @@ async function loadSettings(id) {
     _serverProps = await api('GET', `/api/instances/${id}/properties`) ?? {}
     renderPropsForm(_serverProps)
     loadRestartConfig(id)
+    loadJavaConfig(id)
   } catch (e) {
     form.innerHTML = `<div class="settings-loading">${esc(e.message)}</div>`
   }
@@ -1548,6 +1549,96 @@ async function saveRestartConfig() {
     showSettingsMsg('restart-cfg-msg', 'Restart settings saved.', 'success')
   } catch (e) {
     showSettingsMsg('restart-cfg-msg', e.message, 'error')
+  }
+}
+
+// ─── Java config ──────────────────────────────────────────────────────────────
+
+function recommendedJava(mcVersion) {
+  const parts = (mcVersion || '').split('.')
+  const minor = parseInt(parts[1] || '21', 10)
+  const patch = parseInt(parts[2] || '0', 10)
+  if (minor <= 16) return 8
+  if (minor <= 19) return 17
+  if (minor === 20 && patch < 5) return 17
+  return 21
+}
+
+async function loadJavaConfig(id) {
+  const inst = instances.get(id)
+  const currentPath = inst?.java_path ?? null
+  const reqJava = recommendedJava(inst?.minecraft_version)
+
+  const noteEl = document.getElementById('java-required-note')
+  if (noteEl) noteEl.textContent = `Required: Java ${reqJava}`
+
+  const select = document.getElementById('cfg-java-select')
+  if (!select) return
+
+  select.innerHTML = '<option value="">System default</option>'
+
+  try {
+    const data = await api('GET', '/api/java/installs')
+    const sysVer = data.system_version ? ` (Java ${data.system_version})` : ''
+    select.options[0].textContent = `System default${sysVer}`
+
+    for (const install of (data.installs || [])) {
+      const opt = document.createElement('option')
+      opt.value = install.path
+      opt.textContent = `Java ${install.version} — ${install.path}`
+      select.appendChild(opt)
+    }
+
+    // If current path isn't in the detected list, add it so it's visible
+    if (currentPath && ![...select.options].some(o => o.value === currentPath)) {
+      const opt = document.createElement('option')
+      opt.value = currentPath
+      opt.textContent = `Current: ${currentPath}`
+      select.appendChild(opt)
+    }
+
+    const customOpt = document.createElement('option')
+    customOpt.value = '__custom__'
+    customOpt.textContent = 'Custom path…'
+    select.appendChild(customOpt)
+
+    select.value = currentPath || ''
+    if (select.value !== (currentPath || '') && currentPath) {
+      select.value = '__custom__'
+      document.getElementById('cfg-java-custom').value = currentPath
+    }
+  } catch {
+    // Leave dropdown with just "System default" — non-fatal
+  }
+
+  onJavaSelectChange()
+}
+
+function onJavaSelectChange() {
+  const val = document.getElementById('cfg-java-select')?.value
+  const row = document.getElementById('cfg-java-custom-row')
+  if (!row) return
+  row.classList.toggle('hidden', val !== '__custom__')
+}
+
+async function saveJavaConfig() {
+  if (!detailId) return
+  const select = document.getElementById('cfg-java-select')
+  let javaPath = select.value
+  if (javaPath === '__custom__') {
+    javaPath = document.getElementById('cfg-java-custom').value.trim() || null
+  } else if (!javaPath) {
+    javaPath = null
+  }
+
+  try {
+    await api('POST', `/api/instances/${detailId}/java-config`, { java_path: javaPath })
+    // Update local cache so the hint stays correct without a full reload
+    const inst = instances.get(detailId)
+    if (inst) inst.java_path = javaPath
+    showSettingsMsg('java-cfg-msg', 'Java settings saved.', 'success')
+  } catch (e) {
+    showSettingsMsg('java-cfg-msg', e.message, 'error')
   }
 }
 

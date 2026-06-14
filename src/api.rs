@@ -466,6 +466,49 @@ pub async fn import_modpack(
     Ok(StatusCode::ACCEPTED)
 }
 
+// ── Java ──────────────────────────────────────────────────────────────────────
+
+pub async fn get_java_installs() -> impl IntoResponse {
+    let (sys_ver, installs) = tokio::task::spawn_blocking(|| {
+        (crate::java::java_version("java"), crate::java::list_java_installs())
+    }).await.unwrap_or((None, vec![]));
+
+    Json(serde_json::json!({
+        "system_version": sys_ver,
+        "installs": installs,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct JavaConfigRequest {
+    pub java_path: Option<String>,
+}
+
+pub async fn set_java_config(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<JavaConfigRequest>,
+) -> ApiResult<StatusCode> {
+    let instance_dir = {
+        let instances = state.instances.read().await;
+        instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?
+            .instance_dir.clone()
+    };
+
+    {
+        let mut instances = state.instances.write().await;
+        if let Some(inst) = instances.get_mut(&id) {
+            inst.config.server.java_path = req.java_path.filter(|s| !s.trim().is_empty());
+            if let Ok(toml_str) = toml::to_string_pretty(&inst.config) {
+                let _ = std::fs::write(instance_dir.join("msm.toml"), toml_str);
+            }
+        }
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // ── FTB ───────────────────────────────────────────────────────────────────────
 
 pub async fn ftb_search(

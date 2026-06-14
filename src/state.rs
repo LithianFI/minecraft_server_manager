@@ -47,6 +47,7 @@ pub struct InstanceInfo {
     pub port: u16,
     pub ram_mb: Option<u64>,
     pub tps: Option<f32>,
+    pub java_path: Option<String>,
 }
 
 impl From<&InstanceState> for InstanceInfo {
@@ -67,6 +68,7 @@ impl From<&InstanceState> for InstanceInfo {
             port: s.config.instance.port,
             ram_mb: s.ram_mb,
             tps: s.tps,
+            java_path: s.config.server.java_path.clone(),
         }
     }
 }

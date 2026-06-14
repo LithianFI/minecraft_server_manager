@@ -1,4 +1,54 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct JavaInstall {
+    pub version: u32,
+    pub path: String,
+}
+
+/// Return every Java binary found on the system, sorted by version.
+pub fn list_java_installs() -> Vec<JavaInstall> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // /usr/lib/jvm/ — Debian/Ubuntu/Arch/Fedora
+    if let Ok(entries) = std::fs::read_dir("/usr/lib/jvm") {
+        for e in entries.flatten() {
+            candidates.push(e.path().join("bin/java"));
+        }
+    }
+
+    // SDKMAN
+    if let Some(home) = dirs::home_dir() {
+        let sdkman = home.join(".sdkman/candidates/java");
+        if let Ok(entries) = std::fs::read_dir(&sdkman) {
+            for e in entries.flatten() {
+                if e.file_name().to_string_lossy() == "current" { continue; }
+                candidates.push(e.path().join("bin/java"));
+            }
+        }
+    }
+
+    // Homebrew
+    for v in [8u32, 11, 17, 21, 22, 23, 24] {
+        candidates.push(PathBuf::from(format!("/opt/homebrew/opt/openjdk@{}/bin/java", v)));
+    }
+
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut installs: Vec<JavaInstall> = candidates
+        .into_iter()
+        .filter(|p| p.exists() && seen.insert(p.clone()))
+        .filter_map(|p| {
+            let ver = java_version(p.to_str().unwrap_or(""))?;
+            Some(JavaInstall { version: ver, path: p.to_string_lossy().into_owned() })
+        })
+        .collect();
+
+    installs.sort_by_key(|i| i.version);
+    installs
+}
 
 /// Returns the recommended Java major version for a Minecraft version string ("1.X.Y").
 pub fn recommended_java(mc_version: &str) -> u32 {

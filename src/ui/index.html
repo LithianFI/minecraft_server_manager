@@ -148,6 +148,30 @@
         </div>
       </section>
 
+      <!-- Java Settings -->
+      <section class="settings-section">
+        <div class="settings-section-header">
+          <h4>Java</h4>
+          <span id="java-required-note" class="settings-note"></span>
+        </div>
+        <div class="props-form">
+          <label class="prop-row">
+            <span class="prop-label">Java installation</span>
+            <select id="cfg-java-select" class="prop-select" onchange="onJavaSelectChange()">
+              <option value="">System default</option>
+            </select>
+          </label>
+          <label class="prop-row hidden" id="cfg-java-custom-row">
+            <span class="prop-label">Custom path</span>
+            <input id="cfg-java-custom" type="text" class="prop-input" placeholder="/usr/lib/jvm/java-21-.../bin/java">
+          </label>
+        </div>
+        <div class="settings-actions">
+          <button class="btn-primary" onclick="saveJavaConfig()">Save Java Settings</button>
+          <span id="java-cfg-msg" class="settings-msg hidden"></span>
+        </div>
+      </section>
+
     </div>
   </div>
 
