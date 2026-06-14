@@ -339,7 +339,7 @@ async fn mods(ctx: Context<'_>) -> Result<(), Error> {
 
     let state = ctx.data().state.clone();
 
-    let (instance_dir, display_name) = {
+    let (instance_dir, display_name, mc_version, loader, loader_version) = {
         let instances = state.instances.read().await;
         // Prefer the running instance; fall back to the first available
         let inst = instances
@@ -351,6 +351,9 @@ async fn mods(ctx: Context<'_>) -> Result<(), Error> {
                 i.instance_dir.clone(),
                 i.config.instance.display_name.clone()
                     .unwrap_or_else(|| i.config.instance.name.clone()),
+                i.config.instance.minecraft_version.clone(),
+                i.config.instance.loader.clone().unwrap_or_else(|| "unknown".to_string()),
+                i.config.instance.loader_version.clone(),
             ),
             None => {
                 ctx.say("No instances configured.").await?;
@@ -366,7 +369,15 @@ async fn mods(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     }
 
-    let mut lines = format!("Mods for {} — {} installed\n\n", display_name, lock.mods.len());
+    let loader_display = match loader_version {
+        Some(ref v) => format!("{} {}", loader, v),
+        None => loader.clone(),
+    };
+
+    let mut lines = format!(
+        "Mods for {} — Minecraft {} | {} — {} installed\n\n",
+        display_name, mc_version, loader_display, lock.mods.len()
+    );
     for m in &lock.mods {
         lines.push_str(&format!(
             "{} v{} — https://modrinth.com/mod/{}\n",
@@ -376,7 +387,10 @@ async fn mods(ctx: Context<'_>) -> Result<(), Error> {
 
     ctx.send(
         poise::CreateReply::default()
-            .content(format!("📦 **{}** — {} mods installed", display_name, lock.mods.len()))
+            .content(format!(
+                "📦 **{}** — Minecraft {} | {} — {} mods installed",
+                display_name, mc_version, loader_display, lock.mods.len()
+            ))
             .attachment(serenity::CreateAttachment::bytes(lines.into_bytes(), "mods.txt")),
     )
     .await?;
