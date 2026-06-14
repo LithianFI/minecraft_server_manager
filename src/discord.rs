@@ -433,10 +433,6 @@ async fn notify_task(
                         InstanceStatus::Crashed => Some(format!("🔴 **{}** has crashed!", instance_id)),
                         _ => None,
                     },
-                    WsEvent::PlayerJoined { instance_id, player } =>
-                        Some(format!("→ `{}` joined **{}**", player, instance_id)),
-                    WsEvent::PlayerLeft { instance_id, player } =>
-                        Some(format!("← `{}` left **{}**", player, instance_id)),
                     WsEvent::BackupDone { instance_id, filename, size_bytes } => {
                         let mb = *size_bytes as f64 / 1_048_576.0;
                         Some(format!("💾 Backup of **{}** done — `{}` ({:.1} MB)", instance_id, filename, mb))
