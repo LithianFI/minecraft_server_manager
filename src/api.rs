@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
-    response::Json,
+    response::{IntoResponse, Json},
 };
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +12,7 @@ use crate::{
     ban,
     ban::{BannedIp, BannedPlayer},
     config::{data_dir, BackupConfig, InstanceConfig, InstanceMeta, RestartConfig, ServerConfig},
-    instance, mod_mgr, modpack, setup, whitelist,
+    ftb, instance, mod_mgr, modpack, setup, whitelist,
     mod_mgr::{ModEntry, ModUpdate},
     whitelist::WhitelistEntry,
     state::{AppState, InstanceInfo, InstanceState, InstanceStatus, LogLine},
@@ -458,6 +458,85 @@ pub async fn import_modpack(
         return Err(err(StatusCode::BAD_REQUEST, "version_id and instance_name are required"));
     }
     tokio::spawn(modpack::import_modpack(state, modpack::ImportRequest {
+        version_id: req.version_id,
+        server_path: req.server_path,
+        instance_name: req.instance_name,
+        port: req.port,
+    }));
+    Ok(StatusCode::ACCEPTED)
+}
+
+// ── FTB ───────────────────────────────────────────────────────────────────────
+
+pub async fn ftb_search(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let term = params.get("term").cloned().unwrap_or_default();
+
+    let search: serde_json::Value = match state.http_client
+        .get("https://api.modpacks.ch/public/modpack/search/20")
+        .query(&[("term", &term)])
+        .header("User-Agent", "msm/0.1")
+        .send().await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| e.to_string())
+    {
+        Ok(r) => match r.json().await.map_err(|e: reqwest::Error| e.to_string()) {
+            Ok(v) => v,
+            Err(e) => return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e}))).into_response(),
+        },
+        Err(e) => return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e}))).into_response(),
+    };
+
+    // Pack IDs (search returns either [id, ...] or [{id, ...}, ...])
+    let pack_ids: Vec<u64> = search.get("packs")
+        .and_then(|p| p.as_array())
+        .map(|arr| arr.iter().filter_map(|p| {
+            p.as_u64().or_else(|| p.get("id").and_then(|id| id.as_u64()))
+        }).take(12).collect())
+        .unwrap_or_default();
+
+    // Fetch details for each pack in parallel
+    let fetches: Vec<_> = pack_ids.iter().map(|&id| {
+        let client = state.http_client.clone();
+        async move {
+            client
+                .get(format!("https://api.modpacks.ch/public/modpack/{}", id))
+                .header("User-Agent", "msm/0.1")
+                .send().await.ok()?
+                .error_for_status().ok()?
+                .json::<serde_json::Value>().await.ok()
+        }
+    }).collect();
+
+    let packs: Vec<serde_json::Value> = futures_util::future::join_all(fetches).await
+        .into_iter()
+        .flatten()
+        .collect();
+
+    Json(serde_json::json!({ "packs": packs })).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct FtbImportRequest {
+    pub pack_id: u64,
+    pub version_id: u64,
+    #[serde(default)]
+    pub server_path: String,
+    pub instance_name: String,
+    pub port: u16,
+}
+
+pub async fn import_ftb_pack(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<FtbImportRequest>,
+) -> ApiResult<StatusCode> {
+    if req.instance_name.trim().is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "instance_name is required"));
+    }
+    tokio::spawn(ftb::import_ftb(state, ftb::FtbImportRequest {
+        pack_id: req.pack_id,
         version_id: req.version_id,
         server_path: req.server_path,
         instance_name: req.instance_name,

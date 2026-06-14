@@ -25,7 +25,8 @@
         <span id="running-name"></span>
       </div>
       <button class="btn-outline" onclick="openSetupModal()">+ Create Server</button>
-      <button class="btn-outline" onclick="openImportModal()">⬇ Import Modpack</button>
+      <button class="btn-outline" onclick="openImportModal()">⬇ Modrinth</button>
+      <button class="btn-outline" onclick="openFtbModal()">⬇ FTB</button>
       <button class="btn-outline" onclick="openAddModal()">+ Add Existing</button>
       <button class="btn-outline" onclick="openWhitelist()">Whitelist</button>
     </div>
@@ -415,6 +416,76 @@
       <div class="modal-footer">
         <span id="import-progress-msg" class="setup-progress-msg"></span>
         <button id="btn-import-close" class="btn-outline hidden" onclick="closeImportModal()">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════ IMPORT FTB MODAL ═══════════════════ -->
+<div id="ftb-modal-backdrop" class="modal-backdrop hidden" onclick="ftbBackdropClose(event)">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h3>Import Modpack from Feed the Beast</h3>
+      <button class="btn-close" onclick="closeFtbModal()">✕</button>
+    </div>
+
+    <!-- Step 1: search + configure -->
+    <div id="ftb-step-1">
+      <div class="setup-form-body">
+        <div class="field">
+          <label>Search FTB Modpacks</label>
+          <div class="import-search-row">
+            <input id="ftb-search-input" type="text" placeholder="e.g. Revelation, Direwolf20, Interactions…"
+                   onkeydown="if(event.key==='Enter'){searchFtbPacks()}">
+            <button id="btn-ftb-search" class="btn-outline" type="button" onclick="searchFtbPacks()">Search</button>
+          </div>
+        </div>
+
+        <div id="ftb-results" class="ftb-results hidden"></div>
+
+        <div id="ftb-selected" class="hidden">
+          <div class="import-project-preview">
+            <div class="import-project-name" id="ftb-pack-name"></div>
+            <div class="import-project-desc" id="ftb-pack-desc"></div>
+          </div>
+
+          <div class="field">
+            <label>Version</label>
+            <select id="ftb-version" class="prop-select"></select>
+          </div>
+
+          <div class="field">
+            <label>Instance Name</label>
+            <input id="ftb-name" type="text" placeholder="My FTB Server" oninput="updateFtbDirHint()">
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label>Server Directory <span class="field-label-opt">(optional)</span></label>
+              <input id="ftb-dir" type="text" placeholder="Leave blank to use default location"
+                     oninput="updateFtbDirHint()">
+              <span id="ftb-dir-hint" class="field-hint"></span>
+            </div>
+            <div class="field import-port-field">
+              <label>Port</label>
+              <input id="ftb-port" type="number" value="25565" min="1" max="65535">
+            </div>
+          </div>
+        </div>
+
+        <div id="ftb-error" class="error-msg hidden"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-outline" onclick="closeFtbModal()">Cancel</button>
+        <button id="btn-ftb-submit" class="btn-primary" onclick="submitFtb()" disabled>Install Server</button>
+      </div>
+    </div>
+
+    <!-- Step 2: progress -->
+    <div id="ftb-step-2" class="hidden">
+      <div id="ftb-log-output" class="setup-log"></div>
+      <div class="modal-footer">
+        <span id="ftb-progress-msg" class="setup-progress-msg"></span>
+        <button id="btn-ftb-close" class="btn-outline hidden" onclick="closeFtbModal()">Close</button>
       </div>
     </div>
   </div>

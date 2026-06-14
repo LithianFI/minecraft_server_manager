@@ -334,7 +334,7 @@ async fn do_import(state: &Arc<AppState>, req: ImportRequest) -> Result<(), Stri
 
 // ── Loader installers ──────────────────────────────────────────────────────────
 
-async fn install_forge(
+pub(crate) async fn install_forge(
     state: &Arc<AppState>,
     mc_version: &str,
     forge_version: &str,
@@ -383,7 +383,7 @@ async fn install_forge(
     }
 }
 
-async fn install_fabric(
+pub(crate) async fn install_fabric(
     state: &Arc<AppState>,
     mc_version: &str,
     loader_version: &str,

@@ -145,13 +145,25 @@ function handleEvent(ev) {
       break
 
     case 'modpack_log':
-      appendImportLog(ev.message)
+      if (!document.getElementById('ftb-step-2').classList.contains('hidden')) {
+        appendFtbLog(ev.message)
+      } else {
+        appendImportLog(ev.message)
+      }
       break
     case 'modpack_done':
-      onModpackDone()
+      if (!document.getElementById('ftb-step-2').classList.contains('hidden')) {
+        onFtbDone()
+      } else {
+        onModpackDone()
+      }
       break
     case 'modpack_failed':
-      onModpackFailed(ev.error)
+      if (!document.getElementById('ftb-step-2').classList.contains('hidden')) {
+        onFtbFailed(ev.error)
+      } else {
+        onModpackFailed(ev.error)
+      }
       break
   }
 }
@@ -1052,6 +1064,176 @@ function onModpackFailed(error) {
   appendImportLog('✗ ' + error, true)
   document.getElementById('import-progress-msg').textContent = ''
   document.getElementById('btn-import-close').classList.remove('hidden')
+}
+
+// ─── FTB Import modal ─────────────────────────────────────────────────────────
+
+let ftbResults = []
+let ftbSelectedPack = null
+
+function openFtbModal() {
+  ftbResults = []
+  ftbSelectedPack = null
+  document.getElementById('ftb-search-input').value = ''
+  document.getElementById('ftb-results').innerHTML = ''
+  document.getElementById('ftb-results').classList.add('hidden')
+  document.getElementById('ftb-selected').classList.add('hidden')
+  document.getElementById('ftb-name').value = ''
+  document.getElementById('ftb-dir').value = ''
+  document.getElementById('ftb-port').value = '25565'
+  document.getElementById('ftb-error').classList.add('hidden')
+  document.getElementById('ftb-step-1').classList.remove('hidden')
+  document.getElementById('ftb-step-2').classList.add('hidden')
+  document.getElementById('ftb-log-output').innerHTML = ''
+  document.getElementById('ftb-progress-msg').textContent = ''
+  document.getElementById('btn-ftb-close').classList.add('hidden')
+  document.getElementById('btn-ftb-submit').disabled = true
+  document.getElementById('ftb-modal-backdrop').classList.remove('hidden')
+}
+
+function closeFtbModal() {
+  document.getElementById('ftb-modal-backdrop').classList.add('hidden')
+}
+
+function ftbBackdropClose(e) {
+  if (e.target === document.getElementById('ftb-modal-backdrop')) closeFtbModal()
+}
+
+async function searchFtbPacks() {
+  const term = document.getElementById('ftb-search-input').value.trim()
+  if (!term) return
+
+  const btn = document.getElementById('btn-ftb-search')
+  const errEl = document.getElementById('ftb-error')
+  const resultsEl = document.getElementById('ftb-results')
+  btn.disabled = true
+  btn.textContent = '…'
+  errEl.classList.add('hidden')
+  resultsEl.innerHTML = '<div class="ftb-result-item" style="color:var(--text-dim)">Searching…</div>'
+  resultsEl.classList.remove('hidden')
+
+  try {
+    const data = await fetch(`/api/ftb/search?term=${encodeURIComponent(term)}`)
+      .then(r => { if (!r.ok) throw new Error(`Search failed (HTTP ${r.status})`); return r.json() })
+
+    ftbResults = (data.packs || []).filter(p => p && p.id)
+
+    if (ftbResults.length === 0) {
+      resultsEl.innerHTML = '<div class="ftb-result-item" style="color:var(--text-dim)">No results found.</div>'
+      return
+    }
+
+    resultsEl.innerHTML = ftbResults.map((p, i) => `
+      <div class="ftb-result-item" onclick="selectFtbPack(${i})">
+        <div class="ftb-result-name">${esc(p.name || 'Unknown')}</div>
+        <div class="ftb-result-desc">${esc(p.synopsis || '')}</div>
+      </div>
+    `).join('')
+  } catch (err) {
+    errEl.textContent = err.message
+    errEl.classList.remove('hidden')
+    resultsEl.classList.add('hidden')
+  } finally {
+    btn.disabled = false
+    btn.textContent = 'Search'
+  }
+}
+
+function selectFtbPack(index) {
+  ftbSelectedPack = ftbResults[index]
+
+  // Highlight selected
+  document.querySelectorAll('.ftb-result-item').forEach((el, i) => {
+    el.classList.toggle('selected', i === index)
+  })
+
+  // Populate version dropdown
+  const versions = (ftbSelectedPack.versions || [])
+    .filter(v => v.type === 'Release' || v.type === 'Beta' || v.type === 'Alpha')
+    .sort((a, b) => (b.updated || 0) - (a.updated || 0))
+
+  const select = document.getElementById('ftb-version')
+  select.innerHTML = versions.map(v =>
+    `<option value="${esc(String(v.id))}">${esc(v.name || String(v.id))} [${esc(v.type || '')}]</option>`
+  ).join('')
+
+  // Pre-fill instance name
+  if (!document.getElementById('ftb-name').value.trim()) {
+    document.getElementById('ftb-name').value = ftbSelectedPack.name || ''
+    updateFtbDirHint()
+  }
+
+  document.getElementById('ftb-pack-name').textContent = ftbSelectedPack.name || ''
+  document.getElementById('ftb-pack-desc').textContent = ftbSelectedPack.synopsis || ''
+  document.getElementById('ftb-selected').classList.remove('hidden')
+  document.getElementById('btn-ftb-submit').disabled = versions.length === 0
+}
+
+function updateFtbDirHint() {
+  const name = document.getElementById('ftb-name').value.trim()
+  const dir  = document.getElementById('ftb-dir').value.trim()
+  const hint = document.getElementById('ftb-dir-hint')
+  if (dir || !name) {
+    hint.textContent = ''
+  } else {
+    const id = slugify(name)
+    hint.textContent = `Default: ~/.local/share/msm/servers/${id}/`
+  }
+}
+
+async function submitFtb() {
+  if (!ftbSelectedPack) return
+  const versionId = parseInt(document.getElementById('ftb-version').value, 10)
+  const name = document.getElementById('ftb-name').value.trim()
+  const dir = document.getElementById('ftb-dir').value.trim()
+  const port = parseInt(document.getElementById('ftb-port').value, 10) || 25565
+
+  const errEl = document.getElementById('ftb-error')
+  if (!name || !versionId) {
+    errEl.textContent = 'Please fill in all required fields.'
+    errEl.classList.remove('hidden')
+    return
+  }
+
+  document.getElementById('ftb-step-1').classList.add('hidden')
+  document.getElementById('ftb-step-2').classList.remove('hidden')
+  document.getElementById('ftb-progress-msg').textContent = 'Starting import…'
+
+  try {
+    await api('POST', '/api/setup/import-ftb', {
+      pack_id: ftbSelectedPack.id,
+      version_id: versionId,
+      server_path: dir,
+      instance_name: name,
+      port,
+    })
+    // Progress via SSE — wait for modpack_done / modpack_failed
+  } catch (err) {
+    appendFtbLog('✗ ' + err.message, true)
+    document.getElementById('ftb-progress-msg').textContent = ''
+    document.getElementById('btn-ftb-close').classList.remove('hidden')
+  }
+}
+
+function appendFtbLog(msg, isError = false) {
+  const el = document.getElementById('ftb-log-output')
+  const line = document.createElement('div')
+  line.className = 'setup-log-line' + (isError ? ' setup-log-error' : '')
+  line.textContent = msg
+  el.appendChild(line)
+  el.scrollTop = el.scrollHeight
+}
+
+function onFtbDone() {
+  document.getElementById('ftb-progress-msg').textContent = 'Import complete!'
+  appendFtbLog('✓ Server is ready — find it in the dashboard.')
+  document.getElementById('btn-ftb-close').classList.remove('hidden')
+}
+
+function onFtbFailed(error) {
+  appendFtbLog('✗ ' + error, true)
+  document.getElementById('ftb-progress-msg').textContent = ''
+  document.getElementById('btn-ftb-close').classList.remove('hidden')
 }
 
 // ─── Whitelist + Bans drawer ──────────────────────────────────────────────────
