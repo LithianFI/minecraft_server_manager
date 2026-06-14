@@ -1255,6 +1255,11 @@ async function doStart(id) {
 }
 
 async function doStop(id) {
+  const inst = instances.get(id)
+  if (inst?.players?.length) {
+    const names = inst.players.join(', ')
+    if (!confirm(`${inst.players.length} player(s) currently online: ${names}\n\nStop the server anyway?`)) return
+  }
   try {
     await api('POST', `/api/instances/${id}/stop`)
   } catch (err) {
@@ -1264,6 +1269,11 @@ async function doStop(id) {
 }
 
 async function doSwitch(id) {
+  const running = [...instances.values()].find(i => i.status === 'running' || i.status === 'starting')
+  if (running?.players?.length) {
+    const names = running.players.join(', ')
+    if (!confirm(`${running.players.length} player(s) online on "${running.display_name || running.id}": ${names}\n\nSwitch server anyway?`)) return
+  }
   try {
     await api('POST', `/api/instances/${id}/switch`)
   } catch (err) {

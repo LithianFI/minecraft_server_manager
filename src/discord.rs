@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
-
 use poise::serenity_prelude as serenity;
 
 use crate::{
@@ -79,6 +78,74 @@ async fn autocomplete_instance<'a>(ctx: Context<'a>, partial: &'a str) -> Vec<St
     matches
 }
 
+// ── Player confirmation helper ────────────────────────────────────────────────
+
+/// Returns the online players for the running instance (empty if none running).
+async fn online_players(state: &AppState) -> Vec<String> {
+    let instances = state.instances.read().await;
+    instances
+        .values()
+        .find(|i| matches!(i.status, InstanceStatus::Running | InstanceStatus::Starting))
+        .map(|i| i.players.iter().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// Shows a Danger/Cancel button prompt when players are online.
+/// Returns `true` if the user confirmed (or there were no players), `false` if cancelled/timed out.
+async fn player_confirm(ctx: Context<'_>, action: &str, players: &[String]) -> Result<bool, Error> {
+    if players.is_empty() {
+        return Ok(true);
+    }
+
+    let yes_id = format!("msm_yes_{}", ctx.id());
+    let no_id  = format!("msm_no_{}", ctx.id());
+
+    let names = players.iter().map(|p| format!("`{}`", p)).collect::<Vec<_>>().join(", ");
+    let prompt = format!(
+        "⚠️ {} player(s) currently online: {}\n{} anyway?",
+        players.len(), names, action
+    );
+
+    let reply = ctx.send(
+        poise::CreateReply::default()
+            .content(&prompt)
+            .components(vec![serenity::CreateActionRow::Buttons(vec![
+                serenity::CreateButton::new(&yes_id)
+                    .label(action)
+                    .style(serenity::ButtonStyle::Danger),
+                serenity::CreateButton::new(&no_id)
+                    .label("Cancel")
+                    .style(serenity::ButtonStyle::Secondary),
+            ])])
+    ).await?;
+
+    let msg = reply.message().await?;
+
+    let interaction = serenity::collector::ComponentInteractionCollector::new(ctx.serenity_context())
+        .message_id(msg.id)
+        .author_id(ctx.author().id)
+        .timeout(Duration::from_secs(30))
+        .next()
+        .await;
+
+    let confirmed = interaction.as_ref().map(|i| i.data.custom_id == yes_id).unwrap_or(false);
+
+    if let Some(press) = &interaction {
+        press.create_response(ctx.serenity_context(), serenity::CreateInteractionResponse::Acknowledge).await.ok();
+    }
+
+    let result_text = if confirmed {
+        prompt
+    } else if interaction.is_none() {
+        "⏱️ Confirmation timed out — no action taken.".to_string()
+    } else {
+        "❌ Cancelled.".to_string()
+    };
+    reply.edit(ctx, poise::CreateReply::default().content(result_text).components(vec![])).await?;
+
+    Ok(confirmed)
+}
+
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 /// Show the currently running server
@@ -149,6 +216,10 @@ async fn stop(ctx: Context<'_>) -> Result<(), Error> {
         ctx.say("⚫ No server is running.").await?;
         return Ok(());
     };
+    let players = online_players(&state).await;
+    if !player_confirm(ctx, "Stop", &players).await? {
+        return Ok(());
+    }
     match instance::stop_instance(state, &id).await {
         Ok(_)  => ctx.say(format!("⏹ Stopping **{}**…", display)).await?,
         Err(e) => ctx.say(format!("❌ {}", e)).await?,
@@ -209,6 +280,10 @@ async fn switch(
     instance_id: String,
 ) -> Result<(), Error> {
     let state = ctx.data().state.clone();
+    let players = online_players(&state).await;
+    if !player_confirm(ctx, "Switch", &players).await? {
+        return Ok(());
+    }
     ctx.defer().await?;
     match instance::switch_instance(state, &instance_id).await {
         Ok(_)  => ctx.say(format!("🔀 Switched to **{}**.", instance_id)).await?,
@@ -254,6 +329,58 @@ async fn backup_cmd(ctx: Context<'_>) -> Result<(), Error> {
     };
     ctx.say(format!("💾 Backup of **{}** started…", display)).await?;
     tokio::spawn(backup::trigger_backup(state, id));
+    Ok(())
+}
+
+/// List all installed mods with versions and Modrinth links
+#[poise::command(slash_command)]
+async fn mods(ctx: Context<'_>) -> Result<(), Error> {
+    ctx.defer().await?;
+
+    let state = ctx.data().state.clone();
+
+    let (instance_dir, display_name) = {
+        let instances = state.instances.read().await;
+        // Prefer the running instance; fall back to the first available
+        let inst = instances
+            .values()
+            .find(|i| matches!(i.status, InstanceStatus::Running | InstanceStatus::Starting))
+            .or_else(|| instances.values().next());
+        match inst {
+            Some(i) => (
+                i.instance_dir.clone(),
+                i.config.instance.display_name.clone()
+                    .unwrap_or_else(|| i.config.instance.name.clone()),
+            ),
+            None => {
+                ctx.say("No instances configured.").await?;
+                return Ok(());
+            }
+        }
+    };
+
+    let lock = crate::mod_mgr::read_lock(&instance_dir);
+
+    if lock.mods.is_empty() {
+        ctx.say("No mods found. Run a mod scan from the dashboard first.").await?;
+        return Ok(());
+    }
+
+    let mut lines = format!("Mods for {} — {} installed\n\n", display_name, lock.mods.len());
+    for m in &lock.mods {
+        lines.push_str(&format!(
+            "{} v{} — https://modrinth.com/mod/{}\n",
+            m.name, m.version_number, m.modrinth_project_id
+        ));
+    }
+
+    ctx.send(
+        poise::CreateReply::default()
+            .content(format!("📦 **{}** — {} mods installed", display_name, lock.mods.len()))
+            .attachment(serenity::CreateAttachment::bytes(lines.into_bytes(), "mods.txt")),
+    )
+    .await?;
+
     Ok(())
 }
 
@@ -362,6 +489,7 @@ async fn run_bot(state: Arc<AppState>, config: DiscordConfig) {
                 backup_cmd(),
                 cmd(),
                 ip(),
+                mods(),
             ],
             on_error: |err| {
                 Box::pin(async move {

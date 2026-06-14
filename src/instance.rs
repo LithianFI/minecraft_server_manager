@@ -277,10 +277,23 @@ async fn process_log_line(state: &AppState, instance_id: &str, line: &str) {
 
     if line.contains("Done (") && line.contains("! For help, type") {
         set_status(state, instance_id, InstanceStatus::Running).await;
-        let mut instances = state.instances.write().await;
-        if let Some(inst) = instances.get_mut(instance_id) {
-            inst.restart_attempts = 0;
-        }
+        let (server_path, instance_dir) = {
+            let mut instances = state.instances.write().await;
+            if let Some(inst) = instances.get_mut(instance_id) {
+                inst.restart_attempts = 0;
+                (inst.config.server.path.clone(), inst.instance_dir.clone())
+            } else {
+                return;
+            }
+        };
+        let client = state.http_client.clone();
+        let id = instance_id.to_string();
+        tokio::spawn(async move {
+            match crate::mod_mgr::scan_mods(&client, &server_path, &instance_dir).await {
+                Ok(lock) => tracing::info!("Mod scan on start: {} mods found for '{}'", lock.mods.len(), id),
+                Err(e)   => tracing::warn!("Mod scan on start failed for '{}': {}", id, e),
+            }
+        });
     }
 
     if let Some(tps) = metrics::parse_tps(line) {
