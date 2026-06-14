@@ -179,7 +179,12 @@ fn auto_detect_config(dir: &std::path::Path) -> Option<InstanceConfig> {
         })
         .unwrap_or(25565);
 
-    let minecraft_version = detect_mc_version(dir).unwrap_or_else(|| "1.21.1".to_string());
+    let loader_info = detect_loader_info(dir);
+    let minecraft_version = loader_info.as_ref()
+        .map(|i| i.minecraft_version.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    let loader = loader_info.as_ref().map(|i| i.loader.clone());
+    let loader_version = loader_info.as_ref().and_then(|i| i.loader_version.clone());
 
     Some(InstanceConfig {
         restart: None,
@@ -187,8 +192,8 @@ fn auto_detect_config(dir: &std::path::Path) -> Option<InstanceConfig> {
             name: id.clone(),
             display_name: None,
             minecraft_version,
-            loader: Some("neoforge".to_string()),
-            loader_version: None,
+            loader,
+            loader_version,
             port,
         },
         server: ServerConfig {
@@ -205,20 +210,73 @@ fn auto_detect_config(dir: &std::path::Path) -> Option<InstanceConfig> {
     })
 }
 
-/// Try to read the MC version from run.sh (NeoForge embeds it in the library path).
-fn detect_mc_version(dir: &std::path::Path) -> Option<String> {
+struct LoaderInfo {
+    minecraft_version: String,
+    loader: String,
+    loader_version: Option<String>,
+}
+
+/// Detect MC version, loader, and loader version from run.sh.
+/// Supports NeoForge, Forge, and Fabric.
+fn detect_loader_info(dir: &std::path::Path) -> Option<LoaderInfo> {
     let run_sh = std::fs::read_to_string(dir.join("run.sh")).ok()?;
-    // NeoForge run.sh contains a path like .../neoforged/neoforge/21.1.172/...
-    let marker = "/neoforged/neoforge/";
-    let idx = run_sh.find(marker)?;
-    let after = &run_sh[idx + marker.len()..];
-    let nf_ver = after.split('/').next()?;
-    let parts: Vec<&str> = nf_ver.split('.').collect();
-    if parts.len() < 2 { return None; }
-    let minor: u32 = parts[1].parse().ok()?;
-    Some(if minor == 0 {
-        format!("1.{}", parts[0])
-    } else {
-        format!("1.{}.{}", parts[0], parts[1])
-    })
+
+    // NeoForge: path like /neoforged/neoforge/21.1.172/
+    if let Some(idx) = run_sh.find("/neoforged/neoforge/") {
+        let after = &run_sh[idx + "/neoforged/neoforge/".len()..];
+        let nf_ver = after.split('/').next()?;
+        let parts: Vec<&str> = nf_ver.split('.').collect();
+        if parts.len() >= 2 {
+            let minor: u32 = parts[1].parse().ok()?;
+            let mc_ver = if minor == 0 {
+                format!("1.{}", parts[0])
+            } else {
+                format!("1.{}.{}", parts[0], parts[1])
+            };
+            return Some(LoaderInfo {
+                minecraft_version: mc_ver,
+                loader: "neoforge".to_string(),
+                loader_version: Some(nf_ver.to_string()),
+            });
+        }
+    }
+
+    // Forge: path like /net/minecraftforge/forge/1.20.1-47.3.0/
+    if let Some(idx) = run_sh.find("/net/minecraftforge/forge/") {
+        let after = &run_sh[idx + "/net/minecraftforge/forge/".len()..];
+        let ver_dir = after.split('/').next()?;
+        // ver_dir is like "1.20.1-47.3.0"
+        let (mc_ver, forge_ver) = ver_dir.split_once('-')?;
+        return Some(LoaderInfo {
+            minecraft_version: mc_ver.to_string(),
+            loader: "forge".to_string(),
+            loader_version: Some(forge_ver.to_string()),
+        });
+    }
+
+    // Fabric: jar named fabric-server-mc.{mc}-loader.{loader}-launcher.{launcher}.jar
+    if let Some(idx) = run_sh.find("fabric-server-mc.") {
+        let after = &run_sh[idx + "fabric-server-mc.".len()..];
+        let mc_end = after.find("-loader.")?;
+        let mc_ver = after[..mc_end].to_string();
+        let loader_after = &after[mc_end + "-loader.".len()..];
+        let loader_end = loader_after.find('-').unwrap_or(loader_after.len());
+        let loader_ver = loader_after[..loader_end].to_string();
+        return Some(LoaderInfo {
+            minecraft_version: mc_ver,
+            loader: "fabric".to_string(),
+            loader_version: Some(loader_ver),
+        });
+    }
+
+    // Fabric fallback: run.sh references fabric-server-launch.jar
+    if run_sh.contains("fabric-server-launch.jar") {
+        return Some(LoaderInfo {
+            minecraft_version: "unknown".to_string(),
+            loader: "fabric".to_string(),
+            loader_version: None,
+        });
+    }
+
+    None
 }
