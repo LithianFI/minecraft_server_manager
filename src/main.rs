@@ -1,10 +1,12 @@
 mod api;
 mod backup;
+mod ban;
 mod config;
 mod discord;
 mod instance;
 mod metrics;
 mod mod_mgr;
+mod restart;
 mod setup;
 mod sse;
 mod state;
@@ -90,6 +92,12 @@ async fn main() {
         .route("/api/instances/{id}/update-version", post(api::update_server_version))
         .route("/api/whitelist", get(api::get_whitelist).post(api::add_to_whitelist))
         .route("/api/whitelist/{name}", axum::routing::delete(api::remove_from_whitelist))
+        .route("/api/bans/players", get(api::get_banned_players).post(api::ban_player))
+        .route("/api/bans/players/{name}", axum::routing::delete(api::unban_player))
+        .route("/api/bans/ips", get(api::get_banned_ips).post(api::ban_ip))
+        .route("/api/bans/ips/{ip}", axum::routing::delete(api::unban_ip))
+        .route("/api/instances/{id}/properties", get(api::get_properties).post(api::set_properties))
+        .route("/api/instances/{id}/restart-config", post(api::update_restart_config))
         .route("/api/setup/install-neoforge", post(api::install_neoforge))
         .with_state(state.clone())
         .layer(CorsLayer::permissive());
@@ -98,12 +106,16 @@ async fn main() {
     tracing::info!("Listening on http://localhost:{}", port);
 
     backup::start_schedulers(state.clone());
+    restart::start_restart_schedulers(state.clone());
     start_instance_watcher(state.clone());
 
-    // Sync master whitelist to all instance directories on startup
+    // Sync master whitelist and bans to all instance directories on startup
     {
-        let entries = whitelist::read_master();
-        whitelist::sync_all(&state, &entries).await;
+        let wl = whitelist::read_master();
+        whitelist::sync_all(&state, &wl).await;
+        let players = ban::read_banned_players();
+        let ips = ban::read_banned_ips();
+        ban::sync_all(&state, &players, &ips).await;
     }
 
     if let Some(discord_cfg) = state.global_config.discord.clone() {

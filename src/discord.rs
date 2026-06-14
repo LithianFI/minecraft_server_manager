@@ -257,6 +257,18 @@ async fn backup_cmd(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Show the public IP address of this server
+#[poise::command(slash_command)]
+async fn ip(ctx: Context<'_>) -> Result<(), Error> {
+    ctx.defer().await?;
+    let ip = reqwest::get("https://api.ipify.org")
+        .await?
+        .text()
+        .await?;
+    ctx.say(format!("🌐 Public IP: `{}`", ip.trim())).await?;
+    Ok(())
+}
+
 /// Send a command to the server console
 #[poise::command(slash_command)]
 async fn cmd(
@@ -349,6 +361,7 @@ async fn run_bot(state: Arc<AppState>, config: DiscordConfig) {
                 players(),
                 backup_cmd(),
                 cmd(),
+                ip(),
             ],
             on_error: |err| {
                 Box::pin(async move {

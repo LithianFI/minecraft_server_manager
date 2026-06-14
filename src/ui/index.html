@@ -61,12 +61,23 @@
   <div id="metrics-bar" class="metrics-bar hidden"></div>
 
   <nav class="tab-nav">
-    <button class="tab-btn active" data-tab="logs"    onclick="switchTab('logs')">Logs</button>
-    <button class="tab-btn"        data-tab="mods"    onclick="switchTab('mods')">Mods</button>
-    <button class="tab-btn"        data-tab="backups" onclick="switchTab('backups')">Backups</button>
+    <button class="tab-btn active" data-tab="logs"     onclick="switchTab('logs')">Logs</button>
+    <button class="tab-btn"        data-tab="mods"     onclick="switchTab('mods')">Mods</button>
+    <button class="tab-btn"        data-tab="backups"  onclick="switchTab('backups')">Backups</button>
+    <button class="tab-btn"        data-tab="settings" onclick="switchTab('settings')">Settings</button>
   </nav>
 
   <div id="tab-logs" class="tab-panel">
+    <div class="log-filter-bar">
+      <div class="log-filter-btns">
+        <button class="log-filter-btn active" data-level="all"   onclick="setLogFilter('all')">All</button>
+        <button class="log-filter-btn"        data-level="info"  onclick="setLogFilter('info')">Info</button>
+        <button class="log-filter-btn"        data-level="warn"  onclick="setLogFilter('warn')">Warn</button>
+        <button class="log-filter-btn"        data-level="error" onclick="setLogFilter('error')">Error</button>
+      </div>
+      <input id="log-search" class="log-search" type="text" placeholder="Search logs…"
+             oninput="setLogSearch(this.value)" autocomplete="off" spellcheck="false">
+    </div>
     <div id="log-output"></div>
     <form class="cmd-bar" onsubmit="submitCmd(event)">
       <span class="prompt">&gt;</span>
@@ -83,6 +94,61 @@
     </div>
     <div id="mod-list"></div>
   </div>
+  <div id="tab-settings" class="tab-panel hidden">
+    <div class="settings-body">
+
+      <!-- Server Properties -->
+      <section class="settings-section">
+        <div class="settings-section-header">
+          <h4>Server Properties</h4>
+          <span class="settings-note">Requires server restart to take effect</span>
+        </div>
+        <div id="props-form" class="props-form">
+          <div class="settings-loading">Loading…</div>
+        </div>
+        <div class="settings-actions">
+          <button class="btn-primary" onclick="saveProperties()">Save Properties</button>
+          <span id="props-msg" class="settings-msg hidden"></span>
+        </div>
+      </section>
+
+      <!-- Restart Settings -->
+      <section class="settings-section">
+        <div class="settings-section-header">
+          <h4>Restart Settings</h4>
+        </div>
+        <div class="props-form">
+          <label class="prop-row prop-row-check">
+            <span class="prop-label">Auto-restart on crash</span>
+            <input id="cfg-auto-restart" type="checkbox">
+          </label>
+          <label class="prop-row">
+            <span class="prop-label">Max restart attempts</span>
+            <input id="cfg-max-attempts" type="number" min="1" max="10" value="3" class="prop-input-sm">
+          </label>
+          <label class="prop-row">
+            <span class="prop-label">Restart delay (seconds)</span>
+            <input id="cfg-delay-secs" type="number" min="0" max="300" value="10" class="prop-input-sm">
+          </label>
+          <label class="prop-row">
+            <span class="prop-label">Scheduled restart (cron)</span>
+            <input id="cfg-schedule" type="text" placeholder="0 4 * * * (daily at 4am)" class="prop-input">
+            <span class="prop-hint">Requires MSM restart to apply changes</span>
+          </label>
+          <label class="prop-row">
+            <span class="prop-label">Pre-restart warning (seconds)</span>
+            <input id="cfg-warning-secs" type="number" min="0" max="3600" value="300" class="prop-input-sm">
+          </label>
+        </div>
+        <div class="settings-actions">
+          <button class="btn-primary" onclick="saveRestartConfig()">Save Restart Settings</button>
+          <span id="restart-cfg-msg" class="settings-msg hidden"></span>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
   <div id="tab-backups" class="tab-panel hidden">
     <div class="backup-toolbar">
       <button class="btn-primary" id="btn-create-backup" onclick="doCreateBackup()">Create Backup</button>
@@ -198,16 +264,51 @@
     <button class="btn-close" onclick="closeWhitelist()">✕</button>
   </div>
 
-  <div class="wl-add-bar">
-    <input id="wl-input" class="wl-input" type="text" placeholder="Player username…"
-           autocomplete="off" spellcheck="false"
-           onkeydown="if(event.key==='Enter'){addToWhitelist()}">
-    <button id="wl-add-btn" class="btn-primary" onclick="addToWhitelist()">Add</button>
+  <div class="wl-tabs">
+    <button class="wl-tab active" data-wltab="whitelist" onclick="switchWlTab('whitelist')">Whitelist</button>
+    <button class="wl-tab"        data-wltab="bans"      onclick="switchWlTab('bans')">Bans</button>
   </div>
-  <div id="wl-msg" class="wl-msg hidden"></div>
 
-  <div id="wl-list" class="wl-list">
-    <div class="wl-loading">Loading…</div>
+  <!-- Whitelist panel -->
+  <div id="wl-panel-whitelist">
+    <div class="wl-add-bar">
+      <input id="wl-input" class="wl-input" type="text" placeholder="Player username…"
+             autocomplete="off" spellcheck="false"
+             onkeydown="if(event.key==='Enter'){addToWhitelist()}">
+      <button id="wl-add-btn" class="btn-primary" onclick="addToWhitelist()">Add</button>
+    </div>
+    <div id="wl-msg" class="wl-msg hidden"></div>
+    <div id="wl-list" class="wl-list">
+      <div class="wl-loading">Loading…</div>
+    </div>
+  </div>
+
+  <!-- Bans panel -->
+  <div id="wl-panel-bans" class="hidden">
+    <div class="wl-ban-sections">
+      <div class="wl-ban-section">
+        <div class="wl-ban-section-title">Player Bans</div>
+        <div class="wl-add-bar">
+          <input id="ban-player-input" class="wl-input" type="text" placeholder="Player username…"
+                 autocomplete="off" spellcheck="false"
+                 onkeydown="if(event.key==='Enter'){banPlayer()}">
+          <button class="btn-primary" onclick="banPlayer()">Ban</button>
+        </div>
+        <div id="ban-msg" class="wl-msg hidden"></div>
+        <div id="ban-player-list" class="wl-list"><div class="wl-loading">Loading…</div></div>
+      </div>
+      <div class="wl-ban-section">
+        <div class="wl-ban-section-title">IP Bans</div>
+        <div class="wl-add-bar">
+          <input id="ban-ip-input" class="wl-input" type="text" placeholder="IP address…"
+                 autocomplete="off" spellcheck="false"
+                 onkeydown="if(event.key==='Enter'){banIp()}">
+          <button class="btn-primary" onclick="banIp()">Ban</button>
+        </div>
+        <div id="ban-ip-msg" class="wl-msg hidden"></div>
+        <div id="ban-ip-list" class="wl-list"><div class="wl-loading">Loading…</div></div>
+      </div>
+    </div>
   </div>
 </aside>
 

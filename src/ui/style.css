@@ -645,6 +645,140 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   margin-right: auto;
 }
 
+/* ── Log filter bar ──────────────────────────────────────────────── */
+.log-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.log-filter-btns { display: flex; gap: 4px; }
+
+.log-filter-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-family: var(--ui);
+  font-weight: 600;
+  letter-spacing: .04em;
+  padding: 3px 10px;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.log-filter-btn:hover { border-color: var(--border-hi); color: var(--text-dim); }
+.log-filter-btn.active { background: var(--border-hi); border-color: var(--border-hi); color: var(--text); }
+
+.log-search {
+  flex: 1;
+  max-width: 260px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  color: var(--text);
+  padding: 4px 10px;
+  font-size: 12px;
+  font-family: var(--mono);
+  outline: none;
+}
+.log-search:focus { border-color: var(--blue); }
+
+/* ── Settings tab ────────────────────────────────────────────────── */
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.settings-section {
+  border-bottom: 1px solid var(--border);
+  padding: 20px 24px;
+}
+
+.settings-section-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.settings-section-header h4 {
+  font-family: var(--ui);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  color: var(--text);
+}
+.settings-note { font-size: 11px; color: var(--text-muted); }
+.settings-loading { color: var(--text-muted); font-size: 13px; padding: 8px 0; }
+
+.props-form { display: flex; flex-direction: column; gap: 4px; }
+
+.prop-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+  cursor: default;
+}
+.prop-row:last-child { border-bottom: none; }
+.prop-row-check { cursor: pointer; }
+.prop-row-check:hover { color: var(--text); }
+
+.prop-label {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.prop-hint { font-size: 11px; color: var(--text-muted); display: block; margin-top: 2px; }
+
+.prop-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  color: var(--text);
+  padding: 5px 8px;
+  font-size: 13px;
+  font-family: var(--body);
+  outline: none;
+  width: 220px;
+}
+.prop-input:focus { border-color: var(--blue); }
+
+.prop-input-sm { width: 90px; }
+
+.prop-select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  color: var(--text);
+  padding: 5px 8px;
+  font-size: 13px;
+  font-family: var(--body);
+  outline: none;
+  cursor: pointer;
+}
+.prop-select:focus { border-color: var(--blue); }
+
+.settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.settings-msg { font-size: 12px; }
+.settings-msg.success { color: var(--green); }
+.settings-msg.error   { color: var(--red); }
+
 /* ── Whitelist drawer ────────────────────────────────────────────── */
 .wl-overlay {
   position: fixed;
@@ -665,6 +799,43 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   flex-direction: column;
   gap: 0;
 }
+
+.wl-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.wl-tab {
+  flex: 1;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: var(--ui);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  padding: 10px;
+  transition: color .15s, border-color .15s;
+}
+.wl-tab:hover { color: var(--text-dim); }
+.wl-tab.active { color: var(--text); border-bottom-color: var(--blue); }
+
+.wl-ban-sections { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+.wl-ban-section { flex: 1; display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--border); }
+.wl-ban-section:last-child { border-bottom: none; }
+.wl-ban-section-title {
+  font-family: var(--ui);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  color: var(--text-muted);
+  padding: 8px 16px 4px;
+  text-transform: uppercase;
+}
+
+.ban-avatar { background: linear-gradient(135deg, var(--red), #dc2626) !important; }
 
 .wl-header {
   display: flex;

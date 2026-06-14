@@ -26,7 +26,25 @@ pub struct InstanceConfig {
     pub instance: InstanceMeta,
     pub server: ServerConfig,
     pub backup: Option<BackupConfig>,
+    pub restart: Option<RestartConfig>,
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct RestartConfig {
+    #[serde(default)]
+    pub auto_restart: bool,
+    #[serde(default = "default_max_attempts")]
+    pub max_attempts: u32,
+    #[serde(default = "default_delay_secs")]
+    pub delay_secs: u64,
+    pub schedule: Option<String>,
+    #[serde(default = "default_warning_secs")]
+    pub warning_secs: u64,
+}
+
+fn default_max_attempts() -> u32 { 3 }
+fn default_delay_secs() -> u64 { 10 }
+fn default_warning_secs() -> u64 { 300 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct InstanceMeta {
@@ -139,6 +157,7 @@ pub async fn load_instance_dir(path: &std::path::Path) -> Option<(String, crate:
             log_buffer: std::collections::VecDeque::new(),
             ram_mb: None,
             tps: None,
+            restart_attempts: 0,
         },
     ))
 }
@@ -163,6 +182,7 @@ fn auto_detect_config(dir: &std::path::Path) -> Option<InstanceConfig> {
     let minecraft_version = detect_mc_version(dir).unwrap_or_else(|| "1.21.1".to_string());
 
     Some(InstanceConfig {
+        restart: None,
         instance: InstanceMeta {
             name: id.clone(),
             display_name: None,

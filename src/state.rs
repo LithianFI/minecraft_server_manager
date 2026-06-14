@@ -32,6 +32,7 @@ pub struct InstanceState {
     pub log_buffer: VecDeque<LogLine>,
     pub ram_mb: Option<u64>,
     pub tps: Option<f32>,
+    pub restart_attempts: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -115,6 +116,11 @@ pub enum WsEvent {
     },
     InstanceAdded {
         instance: InstanceInfo,
+    },
+    AutoRestarting {
+        instance_id: String,
+        attempt: u32,
+        max_attempts: u32,
     },
     UpdateLog {
         instance_id: String,

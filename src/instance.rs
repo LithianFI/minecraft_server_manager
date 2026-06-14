@@ -47,22 +47,89 @@ pub async fn start_instance(state: Arc<AppState>, instance_id: &str) -> Result<(
         }
     }
 
-    let (stdin_tx, stdin_rx) = mpsc::unbounded_channel();
-
-    {
-        let mut processes = state.processes.lock().await;
-        processes.insert(instance_id.to_string(), ProcessHandle { stdin_tx });
-    }
-
-    let state_clone = state.clone();
     let id = instance_id.to_string();
-    tokio::spawn(async move {
-        run_instance_task(state_clone, id, server_path, java_opts, java_path, stdin_rx).await;
-    });
+    tokio::spawn(run_with_restart(state.clone(), id, server_path, java_opts, java_path));
 
     tracing::info!("Starting instance '{}'", instance_id);
     let _ = instance_dir;
     Ok(())
+}
+
+/// Outer loop that runs the instance and handles auto-restart after crashes.
+/// Owns the stdin channel lifecycle so run_instance_task never needs to call start_instance.
+async fn run_with_restart(
+    state: Arc<AppState>,
+    instance_id: String,
+    server_path: PathBuf,
+    java_opts: Option<String>,
+    java_path: Option<String>,
+) {
+    loop {
+        let (stdin_tx, stdin_rx) = mpsc::unbounded_channel();
+        state
+            .processes
+            .lock()
+            .await
+            .insert(instance_id.clone(), ProcessHandle { stdin_tx });
+
+        run_instance_task(
+            state.clone(),
+            instance_id.clone(),
+            server_path.clone(),
+            java_opts.clone(),
+            java_path.clone(),
+            stdin_rx,
+        )
+        .await;
+
+        // Read final status + restart config
+        let (final_status, auto_restart, max_attempts, delay_secs, current_attempts) = {
+            let instances = state.instances.read().await;
+            if let Some(inst) = instances.get(&instance_id) {
+                let r = inst.config.restart.as_ref();
+                (
+                    inst.status.clone(),
+                    r.map(|r| r.auto_restart).unwrap_or(false),
+                    r.map(|r| r.max_attempts).unwrap_or(3),
+                    r.map(|r| r.delay_secs).unwrap_or(10),
+                    inst.restart_attempts,
+                )
+            } else {
+                break;
+            }
+        };
+
+        if final_status != InstanceStatus::Crashed || !auto_restart || current_attempts >= max_attempts {
+            break;
+        }
+
+        let attempt = current_attempts + 1;
+        {
+            let mut instances = state.instances.write().await;
+            if let Some(inst) = instances.get_mut(&instance_id) {
+                inst.restart_attempts = attempt;
+            }
+        }
+        let _ = state.log_tx.send(WsEvent::AutoRestarting {
+            instance_id: instance_id.clone(),
+            attempt,
+            max_attempts,
+        });
+        tracing::info!("Auto-restarting '{}' (attempt {}/{})", instance_id, attempt, max_attempts);
+        tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+
+        // Re-prepare state for the next run
+        set_status(&state, &instance_id, InstanceStatus::Starting).await;
+        {
+            let mut instances = state.instances.write().await;
+            if let Some(inst) = instances.get_mut(&instance_id) {
+                inst.started_at = Some(chrono::Utc::now());
+                inst.players.clear();
+                inst.log_buffer.clear();
+            }
+        }
+        let _ = ensure_eula(&server_path).await;
+    }
 }
 
 async fn run_instance_task(
@@ -77,6 +144,7 @@ async fn run_instance_task(
 
     let mut cmd = Command::new("bash");
     cmd.arg(&run_sh)
+        .arg("nogui")
         .current_dir(&server_path)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -209,6 +277,10 @@ async fn process_log_line(state: &AppState, instance_id: &str, line: &str) {
 
     if line.contains("Done (") && line.contains("! For help, type") {
         set_status(state, instance_id, InstanceStatus::Running).await;
+        let mut instances = state.instances.write().await;
+        if let Some(inst) = instances.get_mut(instance_id) {
+            inst.restart_attempts = 0;
+        }
     }
 
     if let Some(tps) = metrics::parse_tps(line) {

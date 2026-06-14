@@ -5,6 +5,8 @@ const backups    = new Map()   // id → [BackupInfo]
 const modsData   = new Map()   // id → { mods: [], updates: null }
 let   detailId   = null
 let   logPinned  = true
+let   logFilter  = 'all'
+let   logSearch  = ''
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', setupSSE)
@@ -98,6 +100,16 @@ function handleEvent(ev) {
       break
     }
 
+    case 'auto_restarting': {
+      const inst = instances.get(ev.instance_id)
+      if (inst) updateCard(inst)
+      if (detailId === ev.instance_id) {
+        const ts = Math.floor(Date.now() / 1000)
+        appendLogLine(`[MSM] Auto-restarting… (attempt ${ev.attempt}/${ev.max_attempts})`, ts)
+      }
+      break
+    }
+
     case 'update_log':
       if (ev.instance_id === detailId) appendUpdateLog(ev.message)
       break
@@ -140,9 +152,13 @@ function showDetail(id) {
   if (!inst) return
   detailId = id
   logPinned = true
+  logFilter = 'all'
+  logSearch = ''
+  const searchEl = document.getElementById('log-search')
+  if (searchEl) searchEl.value = ''
+  document.querySelectorAll('.log-filter-btn').forEach(b => b.classList.toggle('active', b.dataset.level === 'all'))
   document.getElementById('view-dashboard').classList.add('hidden')
-  const view = document.getElementById('view-detail')
-  view.classList.remove('hidden')
+  document.getElementById('view-detail').classList.remove('hidden')
   refreshDetail(inst)
   switchTab('logs')
   renderLogs()
@@ -335,11 +351,23 @@ function setDetailError(msg) {
 function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name))
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('hidden', p.id !== 'tab-' + name))
-  if (name === 'backups' && detailId) renderBackups()
-  if (name === 'mods' && detailId) renderMods()
+  if (name === 'backups'  && detailId) renderBackups()
+  if (name === 'mods'     && detailId) renderMods()
+  if (name === 'settings' && detailId) loadSettings(detailId)
 }
 
 // ─── Log view ─────────────────────────────────────────────────────────────────
+function linePassesFilter(line) {
+  if (logFilter !== 'all') {
+    const level = logLevel(line)
+    if (logFilter === 'error' && level !== 'log-error') return false
+    if (logFilter === 'warn'  && level !== 'log-warn' && level !== 'log-error') return false
+    if (logFilter === 'info'  && level === 'log-debug') return false
+  }
+  if (logSearch && !line.toLowerCase().includes(logSearch.toLowerCase())) return false
+  return true
+}
+
 function renderLogs() {
   const el = document.getElementById('log-output')
   el.innerHTML = ''
@@ -353,15 +381,26 @@ function appendLogLine(line, timestamp, autoScroll = true) {
   const el = document.getElementById('log-output')
   if (!el) return
 
+  if (!linePassesFilter(line)) return
+
   const div = document.createElement('div')
   div.className = 'log-line ' + logLevel(line)
   div.innerHTML = `<span class="log-ts">${fmtTime(timestamp)}</span><span class="log-msg">${esc(line)}</span>`
   el.appendChild(div)
 
-  // Prune oldest lines from DOM to cap at 1000
   while (el.children.length > 1000) el.removeChild(el.firstChild)
-
   if (autoScroll && logPinned) el.scrollTop = el.scrollHeight
+}
+
+function setLogFilter(level) {
+  logFilter = level
+  document.querySelectorAll('.log-filter-btn').forEach(b => b.classList.toggle('active', b.dataset.level === level))
+  renderLogs()
+}
+
+function setLogSearch(value) {
+  logSearch = value
+  renderLogs()
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -794,12 +833,22 @@ async function finishSetup() {
   }
 }
 
-// ─── Whitelist ────────────────────────────────────────────────────────────────
-let wlEntries = []
+// ─── Whitelist + Bans drawer ──────────────────────────────────────────────────
+let wlEntries  = []
+let banPlayers = []
+let banIps     = []
+
+function switchWlTab(tab) {
+  document.querySelectorAll('.wl-tab').forEach(b => b.classList.toggle('active', b.dataset.wltab === tab))
+  document.getElementById('wl-panel-whitelist').classList.toggle('hidden', tab !== 'whitelist')
+  document.getElementById('wl-panel-bans').classList.toggle('hidden', tab !== 'bans')
+  if (tab === 'bans') loadBans()
+}
 
 async function openWhitelist() {
   document.getElementById('wl-overlay').classList.remove('hidden')
   document.getElementById('wl-drawer').classList.remove('hidden')
+  switchWlTab('whitelist')
   document.getElementById('wl-input').value = ''
   wlHideMsg()
   await loadWhitelist()
@@ -890,6 +939,224 @@ function wlShowMsg(text, type) {
 }
 function wlHideMsg() {
   document.getElementById('wl-msg').classList.add('hidden')
+}
+
+// ─── Ban management ───────────────────────────────────────────────────────────
+async function loadBans() {
+  try {
+    banPlayers = await api('GET', '/api/bans/players') ?? []
+    banIps     = await api('GET', '/api/bans/ips') ?? []
+    renderBanPlayers()
+    renderBanIps()
+  } catch (e) {
+    showBanMsg(e.message, 'error')
+  }
+}
+
+function renderBanPlayers() {
+  const el = document.getElementById('ban-player-list')
+  if (!el) return
+  if (banPlayers.length === 0) { el.innerHTML = '<div class="wl-empty">No player bans.</div>'; return }
+  el.innerHTML = banPlayers
+    .slice().sort((a, b) => a.name.localeCompare(b.name))
+    .map(p => `<div class="wl-row">
+      <div class="wl-avatar ban-avatar">${esc(p.name[0].toUpperCase())}</div>
+      <div class="wl-info">
+        <span class="wl-name">${esc(p.name)}</span>
+        <span class="wl-uuid">${esc(p.reason)}</span>
+      </div>
+      <button class="wl-remove" onclick="unbanPlayer('${esc(p.name)}')" title="Unban">✕</button>
+    </div>`).join('')
+}
+
+function renderBanIps() {
+  const el = document.getElementById('ban-ip-list')
+  if (!el) return
+  if (banIps.length === 0) { el.innerHTML = '<div class="wl-empty">No IP bans.</div>'; return }
+  el.innerHTML = banIps
+    .map(e => `<div class="wl-row">
+      <div class="wl-avatar ban-avatar" style="font-size:11px;font-family:var(--mono)">IP</div>
+      <div class="wl-info">
+        <span class="wl-name">${esc(e.ip)}</span>
+        <span class="wl-uuid">${esc(e.reason)}</span>
+      </div>
+      <button class="wl-remove" onclick="unbanIp('${esc(e.ip)}')" title="Unban">✕</button>
+    </div>`).join('')
+}
+
+async function banPlayer() {
+  const input = document.getElementById('ban-player-input')
+  const username = input.value.trim()
+  if (!username) return
+  showBanMsg('Banning…', '')
+  try {
+    const entry = await api('POST', '/api/bans/players', { username })
+    banPlayers.push(entry)
+    renderBanPlayers()
+    input.value = ''
+    showBanMsg(`${entry.name} banned.`, 'success')
+  } catch (e) { showBanMsg(e.message, 'error') }
+}
+
+async function unbanPlayer(name) {
+  try {
+    await api('DELETE', `/api/bans/players/${encodeURIComponent(name)}`)
+    banPlayers = banPlayers.filter(p => p.name !== name)
+    renderBanPlayers()
+    showBanMsg(`${name} unbanned.`, 'success')
+  } catch (e) { showBanMsg(e.message, 'error') }
+}
+
+async function banIp() {
+  const input = document.getElementById('ban-ip-input')
+  const ip = input.value.trim()
+  if (!ip) return
+  showBanMsg('Banning…', '')
+  try {
+    const entry = await api('POST', '/api/bans/ips', { ip })
+    banIps.push(entry)
+    renderBanIps()
+    input.value = ''
+    showBanMsg(`${entry.ip} banned.`, 'success')
+  } catch (e) { showBanMsg(e.message, 'error') }
+}
+
+async function unbanIp(ip) {
+  try {
+    await api('DELETE', `/api/bans/ips/${encodeURIComponent(ip)}`)
+    banIps = banIps.filter(e => e.ip !== ip)
+    renderBanIps()
+    showBanMsg(`${ip} unbanned.`, 'success')
+  } catch (e) { showBanMsg(e.message, 'error') }
+}
+
+let _banMsgTimer = null
+function showBanMsg(text, type) {
+  const el = document.getElementById('ban-msg')
+  if (!el) return
+  el.textContent = text
+  el.className = 'wl-msg' + (type ? ' ' + type : '')
+  el.classList.remove('hidden')
+  if (_banMsgTimer) clearTimeout(_banMsgTimer)
+  if (type === 'success') _banMsgTimer = setTimeout(() => el.classList.add('hidden'), 5000)
+}
+
+// ─── Settings tab ─────────────────────────────────────────────────────────────
+const SERVER_PROPS = [
+  { key: 'motd',                label: 'Server Description (MOTD)', type: 'text' },
+  { key: 'max-players',         label: 'Max Players',              type: 'number', min: 1, max: 1000 },
+  { key: 'online-mode',         label: 'Online Mode',              type: 'boolean' },
+  { key: 'white-list',          label: 'Enforce Whitelist',        type: 'boolean' },
+  { key: 'difficulty',          label: 'Difficulty',               type: 'select', options: ['peaceful','easy','normal','hard'] },
+  { key: 'gamemode',            label: 'Default Gamemode',         type: 'select', options: ['survival','creative','adventure','spectator'] },
+  { key: 'pvp',                 label: 'PvP',                      type: 'boolean' },
+  { key: 'allow-flight',        label: 'Allow Flight',             type: 'boolean' },
+  { key: 'allow-nether',        label: 'Allow Nether',             type: 'boolean' },
+  { key: 'spawn-protection',    label: 'Spawn Protection Radius',  type: 'number', min: 0, max: 100 },
+  { key: 'view-distance',       label: 'View Distance (chunks)',   type: 'number', min: 3, max: 32 },
+  { key: 'simulation-distance', label: 'Simulation Distance',      type: 'number', min: 3, max: 32 },
+  { key: 'spawn-monsters',      label: 'Spawn Monsters',           type: 'boolean' },
+  { key: 'spawn-animals',       label: 'Spawn Animals',            type: 'boolean' },
+  { key: 'spawn-npcs',          label: 'Spawn Villagers',          type: 'boolean' },
+  { key: 'enable-command-block',label: 'Command Blocks',           type: 'boolean' },
+]
+
+let _serverProps = {}
+
+async function loadSettings(id) {
+  const form = document.getElementById('props-form')
+  if (!form) return
+  form.innerHTML = '<div class="settings-loading">Loading…</div>'
+  try {
+    _serverProps = await api('GET', `/api/instances/${id}/properties`) ?? {}
+    renderPropsForm(_serverProps)
+    loadRestartConfig(id)
+  } catch (e) {
+    form.innerHTML = `<div class="settings-loading">${esc(e.message)}</div>`
+  }
+}
+
+function renderPropsForm(props) {
+  const form = document.getElementById('props-form')
+  form.innerHTML = SERVER_PROPS.map(def => {
+    const val = props[def.key] ?? ''
+    if (def.type === 'boolean') {
+      const checked = val === 'true' ? 'checked' : ''
+      return `<label class="prop-row prop-row-check">
+        <span class="prop-label">${esc(def.label)}</span>
+        <input type="checkbox" data-key="${esc(def.key)}" ${checked}>
+      </label>`
+    }
+    if (def.type === 'select') {
+      const opts = def.options.map(o => `<option ${o === val ? 'selected' : ''}>${o}</option>`).join('')
+      return `<label class="prop-row">
+        <span class="prop-label">${esc(def.label)}</span>
+        <select class="prop-select" data-key="${esc(def.key)}">${opts}</select>
+      </label>`
+    }
+    const extra = def.min != null ? `min="${def.min}" max="${def.max}"` : ''
+    return `<label class="prop-row">
+      <span class="prop-label">${esc(def.label)}</span>
+      <input type="${def.type}" class="prop-input" data-key="${esc(def.key)}" value="${esc(val)}" ${extra}>
+    </label>`
+  }).join('')
+}
+
+async function saveProperties() {
+  if (!detailId) return
+  const form = document.getElementById('props-form')
+  const updates = {}
+  form.querySelectorAll('[data-key]').forEach(el => {
+    const key = el.dataset.key
+    if (el.type === 'checkbox') updates[key] = el.checked ? 'true' : 'false'
+    else updates[key] = el.value
+  })
+  try {
+    await api('POST', `/api/instances/${detailId}/properties`, updates)
+    showSettingsMsg('props-msg', 'Properties saved.', 'success')
+  } catch (e) {
+    showSettingsMsg('props-msg', e.message, 'error')
+  }
+}
+
+async function loadRestartConfig(id) {
+  const inst = instances.get(id)
+  if (!inst) return
+  // Restart config comes from the instance info if we expose it, else we just use defaults
+  // We'll do a GET /api/instances/{id} to get current config
+  try {
+    const list = await api('GET', '/api/instances')
+    const fresh = list?.find(i => i.id === id)
+    if (fresh) instances.set(id, fresh)
+  } catch { /* silent */ }
+}
+
+async function saveRestartConfig() {
+  if (!detailId) return
+  const body = {
+    auto_restart:  document.getElementById('cfg-auto-restart').checked,
+    max_attempts:  parseInt(document.getElementById('cfg-max-attempts').value, 10),
+    delay_secs:    parseInt(document.getElementById('cfg-delay-secs').value, 10),
+    schedule:      document.getElementById('cfg-schedule').value.trim() || null,
+    warning_secs:  parseInt(document.getElementById('cfg-warning-secs').value, 10),
+  }
+  try {
+    await api('POST', `/api/instances/${detailId}/restart-config`, body)
+    showSettingsMsg('restart-cfg-msg', 'Restart settings saved.', 'success')
+  } catch (e) {
+    showSettingsMsg('restart-cfg-msg', e.message, 'error')
+  }
+}
+
+const _settingsMsgTimers = {}
+function showSettingsMsg(elId, text, type) {
+  const el = document.getElementById(elId)
+  if (!el) return
+  el.textContent = text
+  el.className = 'settings-msg' + (type ? ' ' + type : '')
+  el.classList.remove('hidden')
+  if (_settingsMsgTimers[elId]) clearTimeout(_settingsMsgTimers[elId])
+  if (type === 'success') _settingsMsgTimers[elId] = setTimeout(() => el.classList.add('hidden'), 5000)
 }
 
 // ─── Update version wizard ────────────────────────────────────────────────────

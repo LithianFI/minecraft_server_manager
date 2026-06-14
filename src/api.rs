@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     backup::{self, BackupInfo},
-    config::{data_dir, BackupConfig, InstanceConfig, InstanceMeta, ServerConfig},
+    ban,
+    ban::{BannedIp, BannedPlayer},
+    config::{data_dir, BackupConfig, InstanceConfig, InstanceMeta, RestartConfig, ServerConfig},
     instance, mod_mgr, setup, whitelist,
     mod_mgr::{ModEntry, ModUpdate},
     whitelist::WhitelistEntry,
@@ -135,6 +137,7 @@ pub async fn add_instance(
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create directory: {}", e)))?;
 
     let config = InstanceConfig {
+        restart: None,
         instance: InstanceMeta {
             name: id.clone(),
             display_name: Some(req.display_name.clone()),
@@ -173,6 +176,7 @@ pub async fn add_instance(
         log_buffer: std::collections::VecDeque::new(),
         ram_mb: None,
         tps: None,
+        restart_attempts: 0,
     };
 
     let info = InstanceInfo::from(&inst_state);
@@ -422,6 +426,252 @@ pub async fn remove_from_whitelist(
     }
     whitelist::write_master(&entries).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     whitelist::sync_all(&state, &entries).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ── Bans ──────────────────────────────────────────────────────────────────────
+
+pub async fn get_banned_players() -> Json<Vec<BannedPlayer>> {
+    Json(ban::read_banned_players())
+}
+
+pub async fn get_banned_ips() -> Json<Vec<BannedIp>> {
+    Json(ban::read_banned_ips())
+}
+
+#[derive(Deserialize)]
+pub struct BanPlayerRequest {
+    pub username: String,
+    #[serde(default)]
+    pub reason: String,
+}
+
+pub async fn ban_player(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<BanPlayerRequest>,
+) -> ApiResult<Json<BannedPlayer>> {
+    let username = req.username.trim();
+    if username.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "username is required"));
+    }
+    let reason = if req.reason.is_empty() {
+        "Banned by an operator.".to_string()
+    } else {
+        req.reason.clone()
+    };
+
+    let (uuid, name) = ban::lookup_player(&state.http_client, username)
+        .await
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+
+    let mut players = ban::read_banned_players();
+    if players.iter().any(|p| p.name.eq_ignore_ascii_case(&name)) {
+        return Err(err(StatusCode::CONFLICT, format!("'{}' is already banned", name)));
+    }
+
+    let entry = ban::new_player_ban(uuid, name, reason);
+    players.push(entry.clone());
+    ban::write_banned_players(&players).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    ban::sync_all(&state, &players, &ban::read_banned_ips()).await;
+    Ok(Json(entry))
+}
+
+pub async fn unban_player(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> ApiResult<StatusCode> {
+    let mut players = ban::read_banned_players();
+    let before = players.len();
+    players.retain(|p| !p.name.eq_ignore_ascii_case(&name));
+    if players.len() == before {
+        return Err(err(StatusCode::NOT_FOUND, format!("'{}' is not banned", name)));
+    }
+    ban::write_banned_players(&players).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    ban::sync_all(&state, &players, &ban::read_banned_ips()).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct BanIpRequest {
+    pub ip: String,
+    #[serde(default)]
+    pub reason: String,
+}
+
+pub async fn ban_ip(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<BanIpRequest>,
+) -> ApiResult<Json<BannedIp>> {
+    let ip = req.ip.trim().to_string();
+    if ip.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "ip is required"));
+    }
+    let reason = if req.reason.is_empty() {
+        "Banned by an operator.".to_string()
+    } else {
+        req.reason.clone()
+    };
+
+    let mut ips = ban::read_banned_ips();
+    if ips.iter().any(|e| e.ip == ip) {
+        return Err(err(StatusCode::CONFLICT, format!("'{}' is already banned", ip)));
+    }
+    let entry = ban::new_ip_ban(ip, reason);
+    ips.push(entry.clone());
+    ban::write_banned_ips(&ips).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    ban::sync_all(&state, &ban::read_banned_players(), &ips).await;
+    Ok(Json(entry))
+}
+
+pub async fn unban_ip(
+    State(state): State<Arc<AppState>>,
+    Path(ip): Path<String>,
+) -> ApiResult<StatusCode> {
+    let mut ips = ban::read_banned_ips();
+    let before = ips.len();
+    ips.retain(|e| e.ip != ip);
+    if ips.len() == before {
+        return Err(err(StatusCode::NOT_FOUND, format!("'{}' is not banned", ip)));
+    }
+    ban::write_banned_ips(&ips).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    ban::sync_all(&state, &ban::read_banned_players(), &ips).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ── Server properties ─────────────────────────────────────────────────────────
+
+pub async fn get_properties(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<std::collections::HashMap<String, String>>> {
+    let server_path = {
+        let instances = state.instances.read().await;
+        instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?
+            .config.server.path.clone()
+    };
+    let props = parse_server_properties(&server_path)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(props))
+}
+
+pub async fn set_properties(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(updates): Json<std::collections::HashMap<String, String>>,
+) -> ApiResult<StatusCode> {
+    let server_path = {
+        let instances = state.instances.read().await;
+        instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?
+            .config.server.path.clone()
+    };
+    let mut props = parse_server_properties(&server_path).unwrap_or_default();
+    for (k, v) in updates {
+        props.insert(k, v);
+    }
+    write_server_properties(&server_path, &props)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn parse_server_properties(
+    server_path: &std::path::Path,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let content = std::fs::read_to_string(server_path.join("server.properties"))
+        .map_err(|e| format!("Cannot read server.properties: {}", e))?;
+    let mut map = std::collections::HashMap::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with('#') || line.is_empty() { continue; }
+        if let Some((k, v)) = line.split_once('=') {
+            map.insert(k.trim().to_string(), v.trim().to_string());
+        }
+    }
+    Ok(map)
+}
+
+fn write_server_properties(
+    server_path: &std::path::Path,
+    props: &std::collections::HashMap<String, String>,
+) -> Result<(), String> {
+    let path = server_path.join("server.properties");
+    // Preserve comments and order from existing file, update values in-place
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut updated: Vec<String> = Vec::new();
+    let mut written: std::collections::HashSet<&str> = std::collections::HashSet::new();
+
+    for line in existing.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') || trimmed.is_empty() {
+            updated.push(line.to_string());
+            continue;
+        }
+        if let Some((k, _)) = trimmed.split_once('=') {
+            let k = k.trim();
+            if let Some(v) = props.get(k) {
+                updated.push(format!("{}={}", k, v));
+                written.insert(k);
+            } else {
+                updated.push(line.to_string());
+            }
+        } else {
+            updated.push(line.to_string());
+        }
+    }
+    // Append any new keys not in the original file
+    for (k, v) in props {
+        if !written.contains(k.as_str()) {
+            updated.push(format!("{}={}", k, v));
+        }
+    }
+    std::fs::write(&path, updated.join("\n") + "\n")
+        .map_err(|e| format!("Cannot write server.properties: {}", e))
+}
+
+// ── Restart config ────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct RestartConfigRequest {
+    pub auto_restart: bool,
+    pub max_attempts: u32,
+    pub delay_secs: u64,
+    pub schedule: Option<String>,
+    pub warning_secs: u64,
+}
+
+pub async fn update_restart_config(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<RestartConfigRequest>,
+) -> ApiResult<StatusCode> {
+    let instance_dir = {
+        let instances = state.instances.read().await;
+        instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?
+            .instance_dir.clone()
+    };
+
+    let new_cfg = RestartConfig {
+        auto_restart: req.auto_restart,
+        max_attempts: req.max_attempts,
+        delay_secs: req.delay_secs,
+        schedule: req.schedule.filter(|s| !s.trim().is_empty()),
+        warning_secs: req.warning_secs,
+    };
+
+    {
+        let mut instances = state.instances.write().await;
+        if let Some(inst) = instances.get_mut(&id) {
+            inst.config.restart = Some(new_cfg);
+            if let Ok(toml_str) = toml::to_string_pretty(&inst.config) {
+                let _ = std::fs::write(instance_dir.join("msm.toml"), toml_str);
+            }
+        }
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
