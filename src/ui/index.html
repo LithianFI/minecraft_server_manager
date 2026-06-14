@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MSM</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<!-- ═══════════════════════════════ DASHBOARD VIEW ═══ -->
+<div id="view-dashboard">
+  <header class="topbar">
+    <div class="wordmark">
+      <span class="logo">⬡</span>
+      <span class="app-name">MSM</span>
+      <span class="app-sub">Minecraft Server Manager</span>
+    </div>
+    <div class="topbar-right">
+      <div id="running-badge" class="running-badge hidden">
+        <span class="pulse-dot"></span>
+        <span id="running-name"></span>
+      </div>
+      <button class="btn-outline" onclick="openAddModal()">+ Add Instance</button>
+    </div>
+  </header>
+  <main id="dashboard-main">
+    <div id="instances-grid" class="grid"></div>
+    <div id="empty-state" class="empty hidden">
+      <div class="empty-icon">⬡</div>
+      <p>No instances found</p>
+      <p class="empty-sub">Add an instance or drop a folder into <code>~/.local/share/msm/instances/</code></p>
+      <button class="btn-primary" onclick="openAddModal()">Add Instance</button>
+    </div>
+  </main>
+</div>
+
+<!-- ════════════════════════════════ DETAIL VIEW ═════ -->
+<div id="view-detail" class="hidden">
+  <header class="topbar">
+    <button class="btn-back" onclick="showDashboard()">← All Instances</button>
+    <div class="detail-heading">
+      <span id="detail-name" class="detail-name"></span>
+      <span id="detail-badge" class="badge"></span>
+      <span id="detail-version" class="detail-version"></span>
+    </div>
+    <div class="topbar-right">
+      <span id="detail-error" class="inline-error hidden"></span>
+      <button id="btn-detail-start" class="btn-start hidden" onclick="detailStart()">Start</button>
+      <button id="btn-detail-stop"  class="btn-stop  hidden" onclick="detailStop()">Stop</button>
+    </div>
+  </header>
+
+  <div id="player-bar" class="player-bar hidden"></div>
+
+  <nav class="tab-nav">
+    <button class="tab-btn active" data-tab="logs"    onclick="switchTab('logs')">Logs</button>
+    <button class="tab-btn"        data-tab="mods"    onclick="switchTab('mods')">Mods</button>
+    <button class="tab-btn"        data-tab="backups" onclick="switchTab('backups')">Backups</button>
+  </nav>
+
+  <div id="tab-logs" class="tab-panel">
+    <div id="log-output"></div>
+    <form class="cmd-bar" onsubmit="submitCmd(event)">
+      <span class="prompt">&gt;</span>
+      <input id="cmd-input" type="text" placeholder="Send command…" autocomplete="off" spellcheck="false">
+      <button type="submit">Send</button>
+    </form>
+  </div>
+  <div id="tab-mods" class="tab-panel hidden">
+    <div class="placeholder">Mod management coming in Phase 3.</div>
+  </div>
+  <div id="tab-backups" class="tab-panel hidden">
+    <div class="placeholder">Backup management coming in Phase 2.</div>
+  </div>
+</div>
+
+<!-- ══════════════════════════ ADD INSTANCE MODAL ════ -->
+<div id="modal-backdrop" class="modal-backdrop hidden" onclick="backdropClose(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Add Instance</h3>
+      <button class="btn-close" onclick="closeAddModal()">✕</button>
+    </div>
+    <form id="add-form" onsubmit="submitAdd(event)">
+      <div class="field">
+        <label for="add-name">Display Name</label>
+        <input id="add-name" type="text" placeholder="Survival SMP" required oninput="updateIdPreview()">
+        <span id="id-preview" class="field-hint"></span>
+      </div>
+      <div class="field">
+        <label for="add-path">Server Directory</label>
+        <input id="add-path" type="text" placeholder="/home/user/servers/survival" required>
+        <span class="field-hint">Directory containing <code>run.sh</code> (NeoForge-generated)</span>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="add-ver">Minecraft Version</label>
+          <input id="add-ver" type="text" value="1.21.1" required>
+        </div>
+        <div class="field">
+          <label for="add-port">Port</label>
+          <input id="add-port" type="number" value="25565" min="1" max="65535" required>
+        </div>
+      </div>
+      <div id="add-error" class="error-msg hidden"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn-outline" onclick="closeAddModal()">Cancel</button>
+        <button id="btn-add-submit" type="submit" class="btn-primary">Add Instance</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
