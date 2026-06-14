@@ -794,6 +794,104 @@ async function finishSetup() {
   }
 }
 
+// ─── Whitelist ────────────────────────────────────────────────────────────────
+let wlEntries = []
+
+async function openWhitelist() {
+  document.getElementById('wl-overlay').classList.remove('hidden')
+  document.getElementById('wl-drawer').classList.remove('hidden')
+  document.getElementById('wl-input').value = ''
+  wlHideMsg()
+  await loadWhitelist()
+}
+
+function closeWhitelist() {
+  document.getElementById('wl-overlay').classList.add('hidden')
+  document.getElementById('wl-drawer').classList.add('hidden')
+}
+
+async function loadWhitelist() {
+  try {
+    wlEntries = await api('GET', '/api/whitelist') ?? []
+    renderWhitelist()
+  } catch (e) {
+    wlShowMsg('Failed to load: ' + e.message, 'error')
+  }
+}
+
+function renderWhitelist() {
+  const el = document.getElementById('wl-list')
+  if (wlEntries.length === 0) {
+    el.innerHTML = '<div class="wl-empty">No players whitelisted yet.</div>'
+    return
+  }
+  el.innerHTML = wlEntries
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(e => `
+      <div class="wl-row" id="wl-row-${esc(e.name)}">
+        <div class="wl-avatar">${esc(e.name[0].toUpperCase())}</div>
+        <div class="wl-info">
+          <span class="wl-name">${esc(e.name)}</span>
+          <span class="wl-uuid">${esc(e.uuid)}</span>
+        </div>
+        <button class="wl-remove" onclick="removeFromWhitelist('${esc(e.name)}')" title="Remove">✕</button>
+      </div>`).join('')
+}
+
+async function addToWhitelist() {
+  const input = document.getElementById('wl-input')
+  const btn   = document.getElementById('wl-add-btn')
+  const username = input.value.trim()
+  if (!username) return
+
+  btn.disabled = true
+  btn.textContent = '…'
+  wlHideMsg()
+
+  try {
+    const entry = await api('POST', '/api/whitelist', { username })
+    wlEntries.push(entry)
+    renderWhitelist()
+    input.value = ''
+    wlShowMsg(`${entry.name} added and synced to all servers.`, 'success')
+  } catch (e) {
+    wlShowMsg(e.message, 'error')
+  } finally {
+    btn.disabled = false
+    btn.textContent = 'Add'
+    input.focus()
+  }
+}
+
+async function removeFromWhitelist(name) {
+  const row = document.getElementById('wl-row-' + name)
+  if (row) row.style.opacity = '0.4'
+  wlHideMsg()
+  try {
+    await api('DELETE', `/api/whitelist/${encodeURIComponent(name)}`)
+    wlEntries = wlEntries.filter(e => e.name !== name)
+    renderWhitelist()
+    wlShowMsg(`${name} removed from all servers.`, 'success')
+  } catch (e) {
+    if (row) row.style.opacity = ''
+    wlShowMsg(e.message, 'error')
+  }
+}
+
+let _wlMsgTimer = null
+function wlShowMsg(text, type) {
+  const el = document.getElementById('wl-msg')
+  el.textContent = text
+  el.className = 'wl-msg' + (type ? ' ' + type : '')
+  el.classList.remove('hidden')
+  if (_wlMsgTimer) clearTimeout(_wlMsgTimer)
+  if (type === 'success') _wlMsgTimer = setTimeout(wlHideMsg, 6000)
+}
+function wlHideMsg() {
+  document.getElementById('wl-msg').classList.add('hidden')
+}
+
 // ─── Update version wizard ────────────────────────────────────────────────────
 function openUpdateModal() {
   if (!detailId) return

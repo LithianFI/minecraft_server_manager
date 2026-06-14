@@ -26,6 +26,7 @@
       </div>
       <button class="btn-outline" onclick="openSetupModal()">+ Create Server</button>
       <button class="btn-outline" onclick="openAddModal()">+ Add Existing</button>
+      <button class="btn-outline" onclick="openWhitelist()">Whitelist</button>
     </div>
   </header>
   <main id="dashboard-main">
@@ -185,6 +186,30 @@
     </div>
   </div>
 </div>
+
+<!-- ═══════════════════════════════ WHITELIST DRAWER ═══ -->
+<div id="wl-overlay" class="wl-overlay hidden" onclick="closeWhitelist()"></div>
+<aside id="wl-drawer" class="wl-drawer hidden">
+  <div class="wl-header">
+    <div>
+      <div class="wl-title">Global Whitelist</div>
+      <div class="wl-subtitle">Synced to all servers on change</div>
+    </div>
+    <button class="btn-close" onclick="closeWhitelist()">✕</button>
+  </div>
+
+  <div class="wl-add-bar">
+    <input id="wl-input" class="wl-input" type="text" placeholder="Player username…"
+           autocomplete="off" spellcheck="false"
+           onkeydown="if(event.key==='Enter'){addToWhitelist()}">
+    <button id="wl-add-btn" class="btn-primary" onclick="addToWhitelist()">Add</button>
+  </div>
+  <div id="wl-msg" class="wl-msg hidden"></div>
+
+  <div id="wl-list" class="wl-list">
+    <div class="wl-loading">Loading…</div>
+  </div>
+</aside>
 
 <!-- ══════════════════════════ UPDATE VERSION MODAL ═══ -->
 <div id="update-modal-backdrop" class="modal-backdrop hidden" onclick="updateBackdropClose(event)">

@@ -8,6 +8,7 @@ mod mod_mgr;
 mod setup;
 mod sse;
 mod state;
+mod whitelist;
 
 use std::sync::Arc;
 
@@ -87,6 +88,8 @@ async fn main() {
         .route("/api/instances/{id}/mods/update-all", post(api::update_all_mods))
         .route("/api/instances/{id}/mods/{project_id}/update", post(api::update_single_mod))
         .route("/api/instances/{id}/update-version", post(api::update_server_version))
+        .route("/api/whitelist", get(api::get_whitelist).post(api::add_to_whitelist))
+        .route("/api/whitelist/{name}", axum::routing::delete(api::remove_from_whitelist))
         .route("/api/setup/install-neoforge", post(api::install_neoforge))
         .with_state(state.clone())
         .layer(CorsLayer::permissive());
@@ -96,6 +99,12 @@ async fn main() {
 
     backup::start_schedulers(state.clone());
     start_instance_watcher(state.clone());
+
+    // Sync master whitelist to all instance directories on startup
+    {
+        let entries = whitelist::read_master();
+        whitelist::sync_all(&state, &entries).await;
+    }
 
     if let Some(discord_cfg) = state.global_config.discord.clone() {
         discord::start_bot(state.clone(), discord_cfg);

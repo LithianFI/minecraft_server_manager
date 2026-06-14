@@ -10,8 +10,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     backup::{self, BackupInfo},
     config::{data_dir, BackupConfig, InstanceConfig, InstanceMeta, ServerConfig},
-    instance, mod_mgr, setup,
+    instance, mod_mgr, setup, whitelist,
     mod_mgr::{ModEntry, ModUpdate},
+    whitelist::WhitelistEntry,
     state::{AppState, InstanceInfo, InstanceState, InstanceStatus, LogLine},
 };
 
@@ -372,6 +373,56 @@ pub async fn install_neoforge(
     }
     tokio::spawn(setup::install_neoforge(state, req.version, req.server_path));
     Ok(StatusCode::ACCEPTED)
+}
+
+// ── Whitelist ─────────────────────────────────────────────────────────────────
+
+pub async fn get_whitelist() -> Json<Vec<WhitelistEntry>> {
+    Json(whitelist::read_master())
+}
+
+#[derive(Deserialize)]
+pub struct AddWhitelistRequest {
+    pub username: String,
+}
+
+pub async fn add_to_whitelist(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<AddWhitelistRequest>,
+) -> ApiResult<Json<WhitelistEntry>> {
+    let username = req.username.trim();
+    if username.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "username is required"));
+    }
+
+    let entry = whitelist::lookup_player(&state.http_client, username)
+        .await
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+
+    let mut entries = whitelist::read_master();
+    if entries.iter().any(|e| e.name.eq_ignore_ascii_case(&entry.name)) {
+        return Err(err(StatusCode::CONFLICT, format!("'{}' is already whitelisted", entry.name)));
+    }
+    entries.push(entry.clone());
+    whitelist::write_master(&entries).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    whitelist::sync_all(&state, &entries).await;
+
+    Ok(Json(entry))
+}
+
+pub async fn remove_from_whitelist(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> ApiResult<StatusCode> {
+    let mut entries = whitelist::read_master();
+    let before = entries.len();
+    entries.retain(|e| !e.name.eq_ignore_ascii_case(&name));
+    if entries.len() == before {
+        return Err(err(StatusCode::NOT_FOUND, format!("'{}' is not whitelisted", name)));
+    }
+    whitelist::write_master(&entries).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    whitelist::sync_all(&state, &entries).await;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn slugify(s: &str) -> String {
