@@ -25,6 +25,7 @@
         <span id="running-name"></span>
       </div>
       <button class="btn-outline" onclick="openSetupModal()">+ Create Server</button>
+      <button class="btn-outline" onclick="openImportModal()">⬇ Import Modpack</button>
       <button class="btn-outline" onclick="openAddModal()">+ Add Existing</button>
       <button class="btn-outline" onclick="openWhitelist()">Whitelist</button>
     </div>
@@ -348,6 +349,72 @@
       <div class="modal-footer">
         <span id="update-progress-msg" class="setup-progress-msg"></span>
         <button id="btn-update-close" class="btn-outline hidden" onclick="closeUpdateModal()">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════ IMPORT MODPACK MODAL ═══ -->
+<div id="import-modal-backdrop" class="modal-backdrop hidden" onclick="importBackdropClose(event)">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h3>Import Modpack from Modrinth</h3>
+      <button class="btn-close" onclick="closeImportModal()">✕</button>
+    </div>
+
+    <!-- Step 1: search + configure -->
+    <div id="import-step-1">
+      <div class="setup-form-body">
+        <div class="field">
+          <label>Modrinth Project</label>
+          <div class="import-search-row">
+            <input id="import-slug" type="text" placeholder="modrinth.com/modpack/… or project slug"
+                   onkeydown="if(event.key==='Enter'){fetchModpackVersions()}" oninput="importSlugChanged()">
+            <button id="btn-import-fetch" class="btn-outline" type="button" onclick="fetchModpackVersions()">Fetch</button>
+          </div>
+        </div>
+
+        <div id="import-project-preview" class="import-project-preview hidden">
+          <div class="import-project-name" id="import-project-name"></div>
+          <div class="import-project-desc" id="import-project-desc"></div>
+        </div>
+
+        <div class="field hidden" id="import-version-field">
+          <label>Version</label>
+          <select id="import-version" class="prop-select"></select>
+        </div>
+
+        <div class="field">
+          <label>Instance Name</label>
+          <input id="import-name" type="text" placeholder="My Modpack" oninput="updateImportDirHint()">
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Server Directory <span class="field-label-opt">(optional)</span></label>
+            <input id="import-dir" type="text" placeholder="Leave blank to use default location"
+                   oninput="updateImportDirHint()">
+            <span id="import-dir-hint" class="field-hint"></span>
+          </div>
+          <div class="field import-port-field">
+            <label>Port</label>
+            <input id="import-port" type="number" value="25565" min="1" max="65535">
+          </div>
+        </div>
+
+        <div id="import-error" class="error-msg hidden"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-outline" onclick="closeImportModal()">Cancel</button>
+        <button id="btn-import-submit" class="btn-primary" onclick="submitImport()" disabled>Install Server</button>
+      </div>
+    </div>
+
+    <!-- Step 2: progress -->
+    <div id="import-step-2" class="hidden">
+      <div id="import-log-output" class="setup-log"></div>
+      <div class="modal-footer">
+        <span id="import-progress-msg" class="setup-progress-msg"></span>
+        <button id="btn-import-close" class="btn-outline hidden" onclick="closeImportModal()">Close</button>
       </div>
     </div>
   </div>

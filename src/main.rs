@@ -4,8 +4,10 @@ mod ban;
 mod config;
 mod discord;
 mod instance;
+mod java;
 mod metrics;
 mod mod_mgr;
+mod modpack;
 mod restart;
 mod setup;
 mod sse;
@@ -102,6 +104,7 @@ async fn main() {
         .route("/api/instances/{id}/properties", get(api::get_properties).post(api::set_properties))
         .route("/api/instances/{id}/restart-config", post(api::update_restart_config))
         .route("/api/setup/install-neoforge", post(api::install_neoforge))
+        .route("/api/setup/import-modpack", post(api::import_modpack))
         .with_state(state.clone())
         .layer(CorsLayer::permissive());
 

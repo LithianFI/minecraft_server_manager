@@ -339,7 +339,7 @@ async fn mods(ctx: Context<'_>) -> Result<(), Error> {
 
     let state = ctx.data().state.clone();
 
-    let (instance_dir, display_name, mc_version, loader, loader_version) = {
+    let (instance_dir, display_name, mc_version, loader, loader_version, modpack_project_id) = {
         let instances = state.instances.read().await;
         // Prefer the running instance; fall back to the first available
         let inst = instances
@@ -354,6 +354,7 @@ async fn mods(ctx: Context<'_>) -> Result<(), Error> {
                 i.config.instance.minecraft_version.clone(),
                 i.config.instance.loader.clone().unwrap_or_else(|| "unknown".to_string()),
                 i.config.instance.loader_version.clone(),
+                i.config.instance.modrinth_project_id.clone(),
             ),
             None => {
                 ctx.say("No instances configured.").await?;
@@ -374,9 +375,13 @@ async fn mods(ctx: Context<'_>) -> Result<(), Error> {
         None => loader.clone(),
     };
 
+    let modpack_line = modpack_project_id.as_deref()
+        .map(|id| format!("Modpack: https://modrinth.com/modpack/{}\n", id))
+        .unwrap_or_default();
+
     let mut lines = format!(
-        "Mods for {} — Minecraft {} | {} — {} installed\n\n",
-        display_name, mc_version, loader_display, lock.mods.len()
+        "Mods for {} — Minecraft {} | {} — {} installed\n{}\n",
+        display_name, mc_version, loader_display, lock.mods.len(), modpack_line
     );
     for m in &lock.mods {
         lines.push_str(&format!(
@@ -385,11 +390,15 @@ async fn mods(ctx: Context<'_>) -> Result<(), Error> {
         ));
     }
 
+    let modpack_suffix = modpack_project_id.as_deref()
+        .map(|id| format!(" • <https://modrinth.com/modpack/{}>", id))
+        .unwrap_or_default();
+
     ctx.send(
         poise::CreateReply::default()
             .content(format!(
-                "📦 **{}** — Minecraft {} | {} — {} mods installed",
-                display_name, mc_version, loader_display, lock.mods.len()
+                "📦 **{}** — Minecraft {} | {} — {} mods installed{}",
+                display_name, mc_version, loader_display, lock.mods.len(), modpack_suffix
             ))
             .attachment(serenity::CreateAttachment::bytes(lines.into_bytes(), "mods.txt")),
     )

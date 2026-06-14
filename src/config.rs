@@ -54,6 +54,8 @@ pub struct InstanceMeta {
     pub loader: Option<String>,
     pub loader_version: Option<String>,
     pub port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modrinth_project_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -145,6 +147,9 @@ pub async fn load_instance_dir(path: &std::path::Path) -> Option<(String, crate:
     let mut resolved = config;
     resolved.server.path = server_path;
 
+    // Migrate instances where server files and MSM metadata share the same directory.
+    migrate_server_dir(path, &mut resolved).await;
+
     Some((
         id.clone(),
         crate::state::InstanceState {
@@ -195,6 +200,7 @@ fn auto_detect_config(dir: &std::path::Path) -> Option<InstanceConfig> {
             loader,
             loader_version,
             port,
+            modrinth_project_id: None,
         },
         server: ServerConfig {
             path: dir.to_path_buf(),
@@ -279,4 +285,60 @@ fn detect_loader_info(dir: &std::path::Path) -> Option<LoaderInfo> {
     }
 
     None
+}
+
+/// If server files and MSM metadata share the same directory (the old layout),
+/// move the server files out to `servers/{id}/` and update msm.toml in place.
+async fn migrate_server_dir(instance_dir: &std::path::Path, config: &mut InstanceConfig) {
+    if config.server.path != instance_dir {
+        return;
+    }
+
+    let id = match instance_dir.file_name() {
+        Some(n) => n.to_string_lossy().to_string(),
+        None => return,
+    };
+
+    let new_server_path = data_dir().join("servers").join(&id);
+
+    if new_server_path.exists() {
+        // Already migrated or a conflict — don't touch anything.
+        return;
+    }
+
+    if fs::create_dir_all(&new_server_path).await.is_err() {
+        tracing::warn!("Migration: could not create '{}'", new_server_path.display());
+        return;
+    }
+
+    // Move everything except MSM metadata files to the new location.
+    const KEEP: &[&str] = &["msm.toml", "mods.lock.toml"];
+    let mut entries = match fs::read_dir(instance_dir).await {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name();
+        if KEEP.contains(&name.to_string_lossy().as_ref()) {
+            continue;
+        }
+        let from = entry.path();
+        let to = new_server_path.join(&name);
+        if let Err(e) = fs::rename(&from, &to).await {
+            tracing::warn!("Migration: could not move '{}': {}", from.display(), e);
+        }
+    }
+
+    config.server.path = new_server_path.clone();
+
+    if let Ok(toml_str) = toml::to_string_pretty(config) {
+        let _ = fs::write(instance_dir.join("msm.toml"), toml_str).await;
+    }
+
+    tracing::info!(
+        "Migrated instance '{}': server files moved to '{}'",
+        id,
+        new_server_path.display()
+    );
 }

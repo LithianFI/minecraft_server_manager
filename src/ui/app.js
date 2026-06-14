@@ -143,6 +143,16 @@ function handleEvent(ev) {
     case 'setup_failed':
       onSetupFailed(ev.error)
       break
+
+    case 'modpack_log':
+      appendImportLog(ev.message)
+      break
+    case 'modpack_done':
+      onModpackDone()
+      break
+    case 'modpack_failed':
+      onModpackFailed(ev.error)
+      break
   }
 }
 
@@ -884,6 +894,164 @@ async function finishSetup() {
     btn.textContent = 'Add to MSM'
     document.getElementById('setup-progress-msg').textContent = 'Failed: ' + err.message
   }
+}
+
+// ─── Import Modpack modal ─────────────────────────────────────────────────────
+
+function openImportModal() {
+  document.getElementById('import-slug').value = ''
+  document.getElementById('import-name').value = ''
+  document.getElementById('import-dir').value = ''
+  document.getElementById('import-port').value = '25565'
+  document.getElementById('import-project-preview').classList.add('hidden')
+  document.getElementById('import-version-field').classList.add('hidden')
+  document.getElementById('import-version').innerHTML = ''
+  document.getElementById('import-error').classList.add('hidden')
+  document.getElementById('import-step-1').classList.remove('hidden')
+  document.getElementById('import-step-2').classList.add('hidden')
+  document.getElementById('import-log-output').innerHTML = ''
+  document.getElementById('import-progress-msg').textContent = ''
+  document.getElementById('btn-import-close').classList.add('hidden')
+  document.getElementById('btn-import-submit').disabled = true
+  document.getElementById('import-modal-backdrop').classList.remove('hidden')
+}
+
+function closeImportModal() {
+  document.getElementById('import-modal-backdrop').classList.add('hidden')
+}
+
+function importBackdropClose(e) {
+  if (e.target === document.getElementById('import-modal-backdrop')) closeImportModal()
+}
+
+function importSlugChanged() {
+  document.getElementById('import-project-preview').classList.add('hidden')
+  document.getElementById('import-version-field').classList.add('hidden')
+  document.getElementById('btn-import-submit').disabled = true
+  document.getElementById('import-error').classList.add('hidden')
+}
+
+function updateImportDirHint() {
+  const name = document.getElementById('import-name').value.trim()
+  const dir  = document.getElementById('import-dir').value.trim()
+  const hint = document.getElementById('import-dir-hint')
+  if (dir || !name) {
+    hint.textContent = ''
+  } else {
+    const id = slugify(name)
+    hint.textContent = `Default: ~/.local/share/msm/servers/${id}/`
+  }
+}
+
+async function fetchModpackVersions() {
+  const raw = document.getElementById('import-slug').value.trim()
+  if (!raw) return
+
+  // Extract slug from full Modrinth URL if pasted
+  const match = raw.match(/modrinth\.com\/modpack\/([^/?#]+)/)
+  const slug = match ? match[1] : raw
+
+  const btn = document.getElementById('btn-import-fetch')
+  const errEl = document.getElementById('import-error')
+  btn.disabled = true
+  btn.textContent = '…'
+  errEl.classList.add('hidden')
+
+  try {
+    const project = await fetch(`https://api.modrinth.com/v2/project/${encodeURIComponent(slug)}`, {
+      headers: { 'User-Agent': 'msm/0.1' }
+    }).then(r => {
+      if (!r.ok) throw new Error(`Project not found (HTTP ${r.status})`)
+      return r.json()
+    })
+
+    if (project.project_type !== 'modpack') {
+      throw new Error(`"${project.title}" is not a modpack (type: ${project.project_type})`)
+    }
+
+    const versions = await fetch(`https://api.modrinth.com/v2/project/${encodeURIComponent(slug)}/version`, {
+      headers: { 'User-Agent': 'msm/0.1' }
+    }).then(r => r.json())
+
+    // Keep only versions that have a primary mrpack file
+    const serverVersions = versions.filter(v =>
+      v.files && v.files.some(f => f.primary && f.filename.endsWith('.mrpack'))
+    )
+    if (serverVersions.length === 0) throw new Error('No server-compatible versions found')
+
+    document.getElementById('import-project-name').textContent = project.title
+    document.getElementById('import-project-desc').textContent = project.description || ''
+    document.getElementById('import-project-preview').classList.remove('hidden')
+
+    if (!document.getElementById('import-name').value.trim()) {
+      document.getElementById('import-name').value = project.title
+    }
+
+    const select = document.getElementById('import-version')
+    select.innerHTML = serverVersions.map(v => {
+      const mc = v.game_versions.slice(0, 2).join(', ') + (v.game_versions.length > 2 ? '…' : '')
+      const loader = v.loaders.join(', ')
+      const tag = v.version_type !== 'release' ? ` [${v.version_type}]` : ''
+      return `<option value="${esc(v.id)}">${esc(v.name)} — MC ${esc(mc)} | ${esc(loader)}${tag}</option>`
+    }).join('')
+
+    document.getElementById('import-version-field').classList.remove('hidden')
+    document.getElementById('btn-import-submit').disabled = false
+  } catch (err) {
+    errEl.textContent = err.message
+    errEl.classList.remove('hidden')
+  } finally {
+    btn.disabled = false
+    btn.textContent = 'Fetch'
+  }
+}
+
+async function submitImport() {
+  const versionId = document.getElementById('import-version').value
+  const name = document.getElementById('import-name').value.trim()
+  const dir = document.getElementById('import-dir').value.trim()
+  const port = parseInt(document.getElementById('import-port').value, 10) || 25565
+
+  const errEl = document.getElementById('import-error')
+  if (!versionId || !name) {
+    errEl.textContent = 'Please fill in all required fields.'
+    errEl.classList.remove('hidden')
+    return
+  }
+
+  document.getElementById('import-step-1').classList.add('hidden')
+  document.getElementById('import-step-2').classList.remove('hidden')
+  document.getElementById('import-progress-msg').textContent = 'Starting import…'
+
+  try {
+    await api('POST', '/api/setup/import-modpack', { version_id: versionId, server_path: dir, instance_name: name, port })
+    // Progress via SSE — wait for modpack_done / modpack_failed
+  } catch (err) {
+    appendImportLog('✗ ' + err.message, true)
+    document.getElementById('import-progress-msg').textContent = ''
+    document.getElementById('btn-import-close').classList.remove('hidden')
+  }
+}
+
+function appendImportLog(msg, isError = false) {
+  const el = document.getElementById('import-log-output')
+  const line = document.createElement('div')
+  line.className = 'setup-log-line' + (isError ? ' setup-log-error' : '')
+  line.textContent = msg
+  el.appendChild(line)
+  el.scrollTop = el.scrollHeight
+}
+
+function onModpackDone() {
+  document.getElementById('import-progress-msg').textContent = 'Import complete!'
+  appendImportLog('✓ Server is ready — find it in the dashboard.')
+  document.getElementById('btn-import-close').classList.remove('hidden')
+}
+
+function onModpackFailed(error) {
+  appendImportLog('✗ ' + error, true)
+  document.getElementById('import-progress-msg').textContent = ''
+  document.getElementById('btn-import-close').classList.remove('hidden')
 }
 
 // ─── Whitelist + Bans drawer ──────────────────────────────────────────────────

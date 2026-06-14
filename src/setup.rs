@@ -7,7 +7,7 @@ use crate::state::{AppState, InstanceStatus, WsEvent};
 
 // ── Shared installer core ──────────────────────────────────────────────────────
 
-async fn download_and_run_installer(
+pub(crate) async fn download_and_run_installer(
     state: &Arc<AppState>,
     version: &str,
     work_dir: &Path,
@@ -61,7 +61,7 @@ async fn download_and_run_installer(
     }
 }
 
-fn run_installer_blocking(
+pub(crate) fn run_installer_blocking(
     installer: &Path,
     work_dir: &Path,
     log_tx: &broadcast::Sender<WsEvent>,

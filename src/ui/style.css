@@ -682,6 +682,20 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   margin-right: auto;
 }
 
+/* ── Import modpack modal ────────────────────────────────────────── */
+.import-search-row { display: flex; gap: 8px; }
+.import-search-row input { flex: 1; }
+.import-port-field { max-width: 110px; flex: none; }
+
+.import-project-preview {
+  background: rgba(255,255,255,.035);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+.import-project-name { font-weight: 600; font-size: 14px; color: var(--text); }
+.import-project-desc { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
+
 /* ── Log filter bar ──────────────────────────────────────────────── */
 .log-filter-bar {
   display: flex;

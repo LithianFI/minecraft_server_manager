@@ -12,7 +12,7 @@ use crate::{
     ban,
     ban::{BannedIp, BannedPlayer},
     config::{data_dir, BackupConfig, InstanceConfig, InstanceMeta, RestartConfig, ServerConfig},
-    instance, mod_mgr, setup, whitelist,
+    instance, mod_mgr, modpack, setup, whitelist,
     mod_mgr::{ModEntry, ModUpdate},
     whitelist::WhitelistEntry,
     state::{AppState, InstanceInfo, InstanceState, InstanceStatus, LogLine},
@@ -145,6 +145,7 @@ pub async fn add_instance(
             loader: Some("neoforge".to_string()),
             loader_version: None,
             port: req.port,
+            modrinth_project_id: None,
         },
         server: ServerConfig {
             path: server_path.clone(),
@@ -437,6 +438,31 @@ pub async fn install_neoforge(
         return Err(err(StatusCode::BAD_REQUEST, "version and server_path are required"));
     }
     tokio::spawn(setup::install_neoforge(state, req.version, req.server_path));
+    Ok(StatusCode::ACCEPTED)
+}
+
+#[derive(Deserialize)]
+pub struct ImportModpackRequest {
+    pub version_id: String,
+    #[serde(default)]
+    pub server_path: String,
+    pub instance_name: String,
+    pub port: u16,
+}
+
+pub async fn import_modpack(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ImportModpackRequest>,
+) -> ApiResult<StatusCode> {
+    if req.version_id.trim().is_empty() || req.instance_name.trim().is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "version_id and instance_name are required"));
+    }
+    tokio::spawn(modpack::import_modpack(state, modpack::ImportRequest {
+        version_id: req.version_id,
+        server_path: req.server_path,
+        instance_name: req.instance_name,
+        port: req.port,
+    }));
     Ok(StatusCode::ACCEPTED)
 }
 

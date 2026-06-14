@@ -134,6 +134,15 @@ pub enum WsEvent {
         instance_id: String,
         error: String,
     },
+    ModpackLog {
+        message: String,
+    },
+    ModpackDone {
+        server_path: String,
+    },
+    ModpackFailed {
+        error: String,
+    },
 }
 
 pub struct ProcessHandle {
