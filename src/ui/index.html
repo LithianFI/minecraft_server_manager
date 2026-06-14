@@ -24,7 +24,8 @@
         <span class="pulse-dot"></span>
         <span id="running-name"></span>
       </div>
-      <button class="btn-outline" onclick="openAddModal()">+ Add Instance</button>
+      <button class="btn-outline" onclick="openSetupModal()">+ Create Server</button>
+      <button class="btn-outline" onclick="openAddModal()">+ Add Existing</button>
     </div>
   </header>
   <main id="dashboard-main">
@@ -49,12 +50,14 @@
     </div>
     <div class="topbar-right">
       <span id="detail-error" class="inline-error hidden"></span>
+      <button class="btn-outline btn-sm" onclick="openUpdateModal()">Update Version</button>
       <button id="btn-detail-start" class="btn-start hidden" onclick="detailStart()">Start</button>
       <button id="btn-detail-stop"  class="btn-stop  hidden" onclick="detailStop()">Stop</button>
     </div>
   </header>
 
   <div id="player-bar" class="player-bar hidden"></div>
+  <div id="metrics-bar" class="metrics-bar hidden"></div>
 
   <nav class="tab-nav">
     <button class="tab-btn active" data-tab="logs"    onclick="switchTab('logs')">Logs</button>
@@ -116,12 +119,111 @@
           <input id="add-port" type="number" value="25565" min="1" max="65535" required>
         </div>
       </div>
+      <div class="field">
+        <label for="add-java">Java Executable <span class="field-label-opt">(optional)</span></label>
+        <input id="add-java" type="text" placeholder="/usr/lib/jvm/java-21-openjdk/bin/java">
+        <span class="field-hint">Leave blank to use system default. Set this if you need a specific JDK version.</span>
+      </div>
       <div id="add-error" class="error-msg hidden"></div>
       <div class="modal-footer">
         <button type="button" class="btn-outline" onclick="closeAddModal()">Cancel</button>
         <button id="btn-add-submit" type="submit" class="btn-primary">Add Instance</button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- ═══════════════════════ CREATE SERVER WIZARD ═══ -->
+<div id="setup-modal-backdrop" class="modal-backdrop hidden" onclick="setupBackdropClose(event)">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h3>Create New Server</h3>
+      <button class="btn-close" onclick="closeSetupModal()">✕</button>
+    </div>
+
+    <!-- Step 1: config -->
+    <div id="setup-step-1">
+      <form id="setup-form" onsubmit="submitSetup(event)">
+        <div class="setup-form-body">
+          <div class="field">
+            <label for="setup-name">Display Name</label>
+            <input id="setup-name" type="text" placeholder="Survival SMP" required>
+          </div>
+          <div class="field">
+            <label for="setup-dir">Server Directory</label>
+            <input id="setup-dir" type="text" placeholder="/home/user/servers/survival" required>
+            <span class="field-hint">Directory will be created if it doesn't exist</span>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="setup-nf-ver">NeoForge Version</label>
+              <input id="setup-nf-ver" type="text" placeholder="21.1.172" required oninput="updateMcPreview()">
+              <span id="setup-mc-preview" class="field-hint"></span>
+            </div>
+            <div class="field">
+              <label for="setup-port">Port</label>
+              <input id="setup-port" type="number" value="25565" min="1" max="65535" required>
+            </div>
+          </div>
+          <div id="setup-error" class="error-msg hidden"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn-outline" onclick="closeSetupModal()">Cancel</button>
+          <button id="btn-setup-submit" type="submit" class="btn-primary">Download &amp; Install</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Step 2: progress -->
+    <div id="setup-step-2" class="hidden">
+      <div id="setup-log-output" class="setup-log"></div>
+      <div id="setup-step-2-footer" class="modal-footer">
+        <span id="setup-progress-msg" class="setup-progress-msg"></span>
+        <button id="btn-setup-done" class="btn-primary hidden" onclick="finishSetup()">Add to MSM</button>
+        <button id="btn-setup-close" class="btn-outline hidden" onclick="closeSetupModal()">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════ UPDATE VERSION MODAL ═══ -->
+<div id="update-modal-backdrop" class="modal-backdrop hidden" onclick="updateBackdropClose(event)">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h3>Update Server Version</h3>
+      <button class="btn-close" onclick="closeUpdateModal()">✕</button>
+    </div>
+
+    <!-- Step 1: version selection -->
+    <div id="update-step-1">
+      <form id="update-form" onsubmit="submitUpdate(event)">
+        <div class="setup-form-body">
+          <div class="update-current-ver" id="update-current-ver"></div>
+          <div class="field">
+            <label for="update-nf-ver">New NeoForge Version</label>
+            <input id="update-nf-ver" type="text" placeholder="21.1.172" required oninput="updateNfPreview()">
+            <span id="update-mc-preview" class="field-hint"></span>
+          </div>
+          <div class="update-warning">
+            ⚠ The server must be stopped before updating. Mods may require a matching NeoForge version — verify compatibility before starting.
+          </div>
+          <div id="update-error" class="error-msg hidden"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn-outline" onclick="closeUpdateModal()">Cancel</button>
+          <button id="btn-update-submit" type="submit" class="btn-primary">Download &amp; Install</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Step 2: progress -->
+    <div id="update-step-2" class="hidden">
+      <div id="update-log-output" class="setup-log"></div>
+      <div class="modal-footer">
+        <span id="update-progress-msg" class="setup-progress-msg"></span>
+        <button id="btn-update-close" class="btn-outline hidden" onclick="closeUpdateModal()">Close</button>
+      </div>
+    </div>
   </div>
 </div>
 

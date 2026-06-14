@@ -45,8 +45,15 @@ function handleEvent(ev) {
       const inst = instances.get(ev.instance_id)
       if (!inst) break
       inst.status = ev.status
+      if (ev.status !== 'running' && ev.status !== 'starting') {
+        inst.ram_mb = null
+        inst.tps    = null
+      }
       updateCard(inst)
-      if (detailId === ev.instance_id) refreshDetail(inst)
+      if (detailId === ev.instance_id) {
+        refreshDetail(inst)
+        refreshMetricsBar(inst)
+      }
       break
     }
 
@@ -80,6 +87,50 @@ function handleEvent(ev) {
       document.getElementById('btn-create-backup').disabled = false
       break
     }
+
+    case 'metrics': {
+      const inst = instances.get(ev.instance_id)
+      if (!inst) break
+      inst.ram_mb = ev.ram_mb
+      if (ev.tps != null) inst.tps = ev.tps
+      updateCard(inst)
+      if (detailId === ev.instance_id) refreshMetricsBar(inst)
+      break
+    }
+
+    case 'update_log':
+      if (ev.instance_id === detailId) appendUpdateLog(ev.message)
+      break
+    case 'update_done': {
+      const inst = instances.get(ev.instance_id)
+      if (inst) {
+        inst.minecraft_version = ev.minecraft_version
+        updateCard(inst)
+        if (detailId === ev.instance_id) refreshDetail(inst)
+      }
+      onUpdateDone(ev.instance_id)
+      break
+    }
+    case 'update_failed':
+      onUpdateFailed(ev.instance_id, ev.error)
+      break
+
+    case 'instance_added': {
+      instances.set(ev.instance.id, ev.instance)
+      logs.set(ev.instance.id, [])
+      renderDashboard()
+      break
+    }
+
+    case 'setup_log':
+      appendSetupLog(ev.message)
+      break
+    case 'setup_done':
+      onSetupDone(ev.server_path)
+      break
+    case 'setup_failed':
+      onSetupFailed(ev.error)
+      break
   }
 }
 
@@ -173,9 +224,29 @@ function cardHTML(inst, running) {
 function cardMidHTML(inst) {
   const running = inst.status === 'running' || inst.status === 'starting'
   if (!running) return `<div class="card-port">:${inst.port}</div>`
-  if (inst.players.length === 0) return `<div class="card-players dim"><span class="icon">◈</span> No players online</div>`
-  const names = inst.players.slice(0, 3).map(esc).join(', ') + (inst.players.length > 3 ? '…' : '')
-  return `<div class="card-players"><span class="icon">◈</span> ${inst.players.length} online <span class="card-player-names">${names}</span></div>`
+
+  let playerLine
+  if (inst.players.length === 0) {
+    playerLine = `<div class="card-players dim"><span class="icon">◈</span> No players online</div>`
+  } else {
+    const names = inst.players.slice(0, 3).map(esc).join(', ') + (inst.players.length > 3 ? '…' : '')
+    playerLine = `<div class="card-players"><span class="icon">◈</span> ${inst.players.length} online <span class="card-player-names">${names}</span></div>`
+  }
+
+  let metricsLine = ''
+  if (inst.ram_mb != null) {
+    const ram = inst.ram_mb >= 1024 ? `${(inst.ram_mb / 1024).toFixed(1)} GB` : `${inst.ram_mb} MB`
+    const tps = inst.tps != null ? ` · <span class="card-tps ${tpsClass(inst.tps)}">${inst.tps.toFixed(1)} TPS</span>` : ''
+    metricsLine = `<div class="card-metrics">${ram} RAM${tps}</div>`
+  }
+
+  return playerLine + metricsLine
+}
+
+function tpsClass(tps) {
+  if (tps >= 18) return 'tps-good'
+  if (tps >= 14) return 'tps-warn'
+  return 'tps-bad'
 }
 
 function cardActionsHTML(inst, running) {
@@ -217,6 +288,7 @@ function refreshDetail(inst) {
   btnStop.disabled  = isBusy
 
   refreshPlayerBar(inst)
+  refreshMetricsBar(inst)
 }
 
 function refreshPlayerBar(inst) {
@@ -224,6 +296,19 @@ function refreshPlayerBar(inst) {
   if (!inst || inst.players.length === 0) { bar.classList.add('hidden'); return }
   bar.classList.remove('hidden')
   bar.innerHTML = `<span class="label">Online:</span>` + inst.players.map(p => `<span class="player-tag">${esc(p)}</span>`).join('')
+}
+
+function refreshMetricsBar(inst) {
+  const bar = document.getElementById('metrics-bar')
+  if (!bar) return
+  if (!inst || inst.ram_mb == null) { bar.classList.add('hidden'); return }
+  bar.classList.remove('hidden')
+  const ram = inst.ram_mb >= 1024 ? `${(inst.ram_mb / 1024).toFixed(1)} GB` : `${inst.ram_mb} MB`
+  let html = `<span class="metric-chip">💾 ${ram}</span>`
+  if (inst.tps != null) {
+    html += `<span class="metric-chip metric-tps ${tpsClass(inst.tps)}">⟳ ${inst.tps.toFixed(1)} TPS</span>`
+  }
+  bar.innerHTML = html
 }
 
 function detailStart() {
@@ -328,12 +413,14 @@ async function submitAdd(e) {
   btn.textContent = 'Adding…'
   errorEl.classList.add('hidden')
 
+  const javaPath = document.getElementById('add-java').value.trim()
   const data = {
     id:                slugify(document.getElementById('add-name').value),
     display_name:      document.getElementById('add-name').value.trim(),
     server_path:       document.getElementById('add-path').value.trim(),
     minecraft_version: document.getElementById('add-ver').value.trim(),
     port:              parseInt(document.getElementById('add-port').value, 10),
+    java_path:         javaPath || null,
   }
 
   try {
@@ -585,6 +672,211 @@ function setModsMsg(text, type) {
   if (type === 'success') {
     _modsMsgTimer = setTimeout(() => el.classList.add('hidden'), 8000)
   }
+}
+
+// ─── Setup wizard ────────────────────────────────────────────────────────────
+let _setupServerPath = null
+let _setupName       = null
+let _setupPort       = 25565
+
+function openSetupModal() {
+  document.getElementById('setup-form').reset()
+  document.getElementById('setup-error').classList.add('hidden')
+  document.getElementById('setup-mc-preview').textContent = ''
+  document.getElementById('setup-step-1').classList.remove('hidden')
+  document.getElementById('setup-step-2').classList.add('hidden')
+  document.getElementById('setup-log-output').innerHTML = ''
+  document.getElementById('setup-progress-msg').textContent = ''
+  document.getElementById('btn-setup-done').classList.add('hidden')
+  document.getElementById('btn-setup-close').classList.add('hidden')
+  document.getElementById('btn-setup-submit').disabled = false
+  document.getElementById('btn-setup-submit').textContent = 'Download & Install'
+  _setupServerPath = null
+  document.getElementById('setup-modal-backdrop').classList.remove('hidden')
+}
+
+function closeSetupModal() {
+  document.getElementById('setup-modal-backdrop').classList.add('hidden')
+}
+
+function setupBackdropClose(e) {
+  if (e.target === e.currentTarget) closeSetupModal()
+}
+
+function updateMcPreview() {
+  const ver = document.getElementById('setup-nf-ver').value.trim()
+  const mc  = neoForgeToMcVersion(ver)
+  document.getElementById('setup-mc-preview').textContent = mc ? `MC ${mc}` : ''
+}
+
+function neoForgeToMcVersion(nfVer) {
+  const parts = nfVer.split('.')
+  if (parts.length < 2 || isNaN(parts[0])) return ''
+  const minor = parseInt(parts[1])
+  return minor === 0 ? `1.${parts[0]}` : `1.${parts[0]}.${parts[1]}`
+}
+
+async function submitSetup(e) {
+  e.preventDefault()
+  const btn     = document.getElementById('btn-setup-submit')
+  const errorEl = document.getElementById('setup-error')
+  btn.disabled  = true
+  btn.textContent = 'Installing…'
+  errorEl.classList.add('hidden')
+
+  _setupName       = document.getElementById('setup-name').value.trim()
+  _setupServerPath = document.getElementById('setup-dir').value.trim()
+  _setupPort       = parseInt(document.getElementById('setup-port').value, 10)
+  const nfVer      = document.getElementById('setup-nf-ver').value.trim()
+
+  // Switch to progress view
+  document.getElementById('setup-step-1').classList.add('hidden')
+  document.getElementById('setup-step-2').classList.remove('hidden')
+  document.getElementById('setup-progress-msg').textContent = 'Installing NeoForge…'
+
+  try {
+    await api('POST', '/api/setup/install-neoforge', { version: nfVer, server_path: _setupServerPath })
+    // Progress comes via SSE — wait for setup_done / setup_failed events
+  } catch (err) {
+    onSetupFailed(err.message)
+  }
+}
+
+function appendSetupLog(msg) {
+  const el = document.getElementById('setup-log-output')
+  if (!el) return
+  const line = document.createElement('div')
+  line.className = 'setup-log-line'
+  line.textContent = msg
+  el.appendChild(line)
+  el.scrollTop = el.scrollHeight
+}
+
+function onSetupDone(serverPath) {
+  _setupServerPath = serverPath
+  document.getElementById('setup-progress-msg').textContent = 'Installation complete!'
+  document.getElementById('btn-setup-done').classList.remove('hidden')
+  document.getElementById('btn-setup-close').classList.remove('hidden')
+  appendSetupLog('✓ Server files ready.')
+}
+
+function onSetupFailed(error) {
+  document.getElementById('setup-progress-msg').textContent = ''
+  document.getElementById('btn-setup-close').classList.remove('hidden')
+  const errEl = document.createElement('div')
+  errEl.className = 'setup-log-line setup-log-error'
+  errEl.textContent = '✗ ' + error
+  document.getElementById('setup-log-output').appendChild(errEl)
+}
+
+async function finishSetup() {
+  const btn = document.getElementById('btn-setup-done')
+  btn.disabled = true
+  btn.textContent = 'Adding…'
+  const mcVer = neoForgeToMcVersion(document.getElementById('setup-nf-ver').value.trim()) ||
+                document.getElementById('setup-nf-ver').value.trim()
+  try {
+    const inst = await api('POST', '/api/instances', {
+      id:                slugify(_setupName),
+      display_name:      _setupName,
+      server_path:       _setupServerPath,
+      minecraft_version: mcVer,
+      port:              _setupPort,
+    })
+    instances.set(inst.id, inst)
+    logs.set(inst.id, [])
+    renderDashboard()
+    closeSetupModal()
+  } catch (err) {
+    btn.disabled = false
+    btn.textContent = 'Add to MSM'
+    document.getElementById('setup-progress-msg').textContent = 'Failed: ' + err.message
+  }
+}
+
+// ─── Update version wizard ────────────────────────────────────────────────────
+function openUpdateModal() {
+  if (!detailId) return
+  const inst = instances.get(detailId)
+  document.getElementById('update-form').reset()
+  document.getElementById('update-error').classList.add('hidden')
+  document.getElementById('update-mc-preview').textContent = ''
+  document.getElementById('update-step-1').classList.remove('hidden')
+  document.getElementById('update-step-2').classList.add('hidden')
+  document.getElementById('update-log-output').innerHTML = ''
+  document.getElementById('update-progress-msg').textContent = ''
+  document.getElementById('btn-update-close').classList.add('hidden')
+  document.getElementById('btn-update-submit').disabled = false
+  document.getElementById('btn-update-submit').textContent = 'Download & Install'
+  const verEl = document.getElementById('update-current-ver')
+  verEl.textContent = inst ? `Current: MC ${inst.minecraft_version}` : ''
+  document.getElementById('update-modal-backdrop').classList.remove('hidden')
+}
+
+function closeUpdateModal() {
+  document.getElementById('update-modal-backdrop').classList.add('hidden')
+}
+
+function updateBackdropClose(e) {
+  if (e.target === e.currentTarget) closeUpdateModal()
+}
+
+function updateNfPreview() {
+  const ver = document.getElementById('update-nf-ver').value.trim()
+  const mc  = neoForgeToMcVersion(ver)
+  document.getElementById('update-mc-preview').textContent = mc ? `MC ${mc}` : ''
+}
+
+async function submitUpdate(e) {
+  e.preventDefault()
+  if (!detailId) return
+  const btn     = document.getElementById('btn-update-submit')
+  const errorEl = document.getElementById('update-error')
+  btn.disabled  = true
+  btn.textContent = 'Installing…'
+  errorEl.classList.add('hidden')
+
+  const nfVer = document.getElementById('update-nf-ver').value.trim()
+
+  document.getElementById('update-step-1').classList.add('hidden')
+  document.getElementById('update-step-2').classList.remove('hidden')
+  document.getElementById('update-progress-msg').textContent = 'Downloading & installing…'
+
+  try {
+    await api('POST', `/api/instances/${detailId}/update-version`, { neoforge_version: nfVer })
+  } catch (err) {
+    document.getElementById('update-step-1').classList.remove('hidden')
+    document.getElementById('update-step-2').classList.add('hidden')
+    btn.disabled = false
+    btn.textContent = 'Download & Install'
+    errorEl.textContent = err.message
+    errorEl.classList.remove('hidden')
+  }
+}
+
+function appendUpdateLog(msg) {
+  const el = document.getElementById('update-log-output')
+  if (!el) return
+  const line = document.createElement('div')
+  line.className = 'setup-log-line'
+  line.textContent = msg
+  el.appendChild(line)
+  el.scrollTop = el.scrollHeight
+}
+
+function onUpdateDone(instanceId) {
+  document.getElementById('update-progress-msg').textContent = 'Update complete!'
+  document.getElementById('btn-update-close').classList.remove('hidden')
+  appendUpdateLog('✓ Version updated successfully.')
+}
+
+function onUpdateFailed(instanceId, error) {
+  document.getElementById('update-progress-msg').textContent = ''
+  document.getElementById('btn-update-close').classList.remove('hidden')
+  const errEl = document.createElement('div')
+  errEl.className = 'setup-log-line setup-log-error'
+  errEl.textContent = '✗ ' + error
+  document.getElementById('update-log-output').appendChild(errEl)
 }
 
 // ─── Action helpers ───────────────────────────────────────────────────────────

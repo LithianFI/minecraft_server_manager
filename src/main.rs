@@ -3,7 +3,9 @@ mod backup;
 mod config;
 mod discord;
 mod instance;
+mod metrics;
 mod mod_mgr;
+mod setup;
 mod sse;
 mod state;
 
@@ -84,6 +86,8 @@ async fn main() {
         .route("/api/instances/{id}/mods/updates", get(api::get_mod_updates))
         .route("/api/instances/{id}/mods/update-all", post(api::update_all_mods))
         .route("/api/instances/{id}/mods/{project_id}/update", post(api::update_single_mod))
+        .route("/api/instances/{id}/update-version", post(api::update_server_version))
+        .route("/api/setup/install-neoforge", post(api::install_neoforge))
         .with_state(state.clone())
         .layer(CorsLayer::permissive());
 
@@ -91,6 +95,7 @@ async fn main() {
     tracing::info!("Listening on http://localhost:{}", port);
 
     backup::start_schedulers(state.clone());
+    start_instance_watcher(state.clone());
 
     if let Some(discord_cfg) = state.global_config.discord.clone() {
         discord::start_bot(state.clone(), discord_cfg);
@@ -105,4 +110,33 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+fn start_instance_watcher(state: Arc<AppState>) {
+    tokio::spawn(async move {
+        let instances_dir = config::data_dir().join("instances");
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+
+            let mut entries = match tokio::fs::read_dir(&instances_dir).await {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if !path.is_dir() { continue; }
+                let id = path.file_name().unwrap().to_string_lossy().to_string();
+
+                let already_known = state.instances.read().await.contains_key(&id);
+                if already_known { continue; }
+
+                if let Some((id, inst_state)) = config::load_instance_dir(&path).await {
+                    let info = state::InstanceInfo::from(&inst_state);
+                    state.instances.write().await.insert(id, inst_state);
+                    let _ = state.log_tx.send(state::WsEvent::InstanceAdded { instance: info });
+                }
+            }
+        }
+    });
 }

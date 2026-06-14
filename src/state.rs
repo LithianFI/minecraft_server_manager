@@ -30,6 +30,8 @@ pub struct InstanceState {
     pub players: HashSet<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub log_buffer: VecDeque<LogLine>,
+    pub ram_mb: Option<u64>,
+    pub tps: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -42,6 +44,8 @@ pub struct InstanceInfo {
     pub players: Vec<String>,
     pub started_at: Option<i64>,
     pub port: u16,
+    pub ram_mb: Option<u64>,
+    pub tps: Option<f32>,
 }
 
 impl From<&InstanceState> for InstanceInfo {
@@ -60,6 +64,8 @@ impl From<&InstanceState> for InstanceInfo {
             players: s.players.iter().cloned().collect(),
             started_at: s.started_at.map(|t| t.timestamp()),
             port: s.config.instance.port,
+            ram_mb: s.ram_mb,
+            tps: s.tps,
         }
     }
 }
@@ -90,6 +96,35 @@ pub enum WsEvent {
         size_bytes: u64,
     },
     BackupFailed {
+        instance_id: String,
+        error: String,
+    },
+    Metrics {
+        instance_id: String,
+        ram_mb: u64,
+        tps: Option<f32>,
+    },
+    SetupLog {
+        message: String,
+    },
+    SetupDone {
+        server_path: String,
+    },
+    SetupFailed {
+        error: String,
+    },
+    InstanceAdded {
+        instance: InstanceInfo,
+    },
+    UpdateLog {
+        instance_id: String,
+        message: String,
+    },
+    UpdateDone {
+        instance_id: String,
+        minecraft_version: String,
+    },
+    UpdateFailed {
         instance_id: String,
         error: String,
     },

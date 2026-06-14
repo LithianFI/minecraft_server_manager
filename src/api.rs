@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     backup::{self, BackupInfo},
     config::{data_dir, BackupConfig, InstanceConfig, InstanceMeta, ServerConfig},
-    instance, mod_mgr,
+    instance, mod_mgr, setup,
     mod_mgr::{ModEntry, ModUpdate},
     state::{AppState, InstanceInfo, InstanceState, InstanceStatus, LogLine},
 };
@@ -97,6 +97,7 @@ pub struct AddInstanceRequest {
     pub server_path: String,
     pub minecraft_version: String,
     pub port: u16,
+    pub java_path: Option<String>,
 }
 
 pub async fn add_instance(
@@ -143,6 +144,8 @@ pub async fn add_instance(
         },
         server: ServerConfig {
             path: server_path.clone(),
+            java_opts: None,
+            java_path: req.java_path.filter(|s| !s.trim().is_empty()),
         },
         backup: Some(BackupConfig {
             enabled: false,
@@ -167,6 +170,8 @@ pub async fn add_instance(
         players: std::collections::HashSet::new(),
         started_at: None,
         log_buffer: std::collections::VecDeque::new(),
+        ram_mb: None,
+        tps: None,
     };
 
     let info = InstanceInfo::from(&inst_state);
@@ -325,6 +330,48 @@ pub async fn update_all_mods(
     mod_mgr::write_lock(&instance_dir, &lock)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ── Version update ────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct UpdateVersionRequest {
+    pub neoforge_version: String,
+}
+
+pub async fn update_server_version(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateVersionRequest>,
+) -> ApiResult<StatusCode> {
+    if req.neoforge_version.trim().is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "neoforge_version is required"));
+    }
+    let exists = state.instances.read().await.contains_key(&id);
+    if !exists {
+        return Err(err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)));
+    }
+    tokio::spawn(setup::update_server_version(state, id, req.neoforge_version));
+    Ok(StatusCode::ACCEPTED)
+}
+
+// ── Setup (NeoForge installer) ─────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct InstallRequest {
+    pub version: String,
+    pub server_path: String,
+}
+
+pub async fn install_neoforge(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<InstallRequest>,
+) -> ApiResult<StatusCode> {
+    if req.version.trim().is_empty() || req.server_path.trim().is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "version and server_path are required"));
+    }
+    tokio::spawn(setup::install_neoforge(state, req.version, req.server_path));
+    Ok(StatusCode::ACCEPTED)
 }
 
 fn slugify(s: &str) -> String {
