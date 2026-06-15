@@ -242,6 +242,9 @@ async fn run_instance_task(
             inst.started_at = None;
             inst.ram_mb = None;
             inst.tps = None;
+            inst.cpu_pct = None;
+            inst.low_tps_streak = 0;
+            inst.high_ram_alerted = false;
         }
     }
 
@@ -249,6 +252,12 @@ async fn run_instance_task(
         instance_id: instance_id.clone(),
         status: final_status.clone(),
     });
+
+    let exit_event = match final_status {
+        InstanceStatus::Crashed => "crashed",
+        _ => "stopped",
+    };
+    state.metrics_db.record_event(&instance_id, chrono::Utc::now().timestamp(), exit_event);
 
     tracing::info!("Instance '{}' exited with status {:?}", instance_id, final_status);
 }
@@ -277,6 +286,7 @@ async fn process_log_line(state: &AppState, instance_id: &str, line: &str) {
 
     if line.contains("Done (") && line.contains("! For help, type") {
         set_status(state, instance_id, InstanceStatus::Running).await;
+        state.metrics_db.record_event(instance_id, chrono::Utc::now().timestamp(), "started");
         let (server_path, instance_dir) = {
             let mut instances = state.instances.write().await;
             if let Some(inst) = instances.get_mut(instance_id) {
@@ -297,20 +307,55 @@ async fn process_log_line(state: &AppState, instance_id: &str, line: &str) {
     }
 
     if let Some(tps) = metrics::parse_tps(line) {
-        let ram_mb = {
+        let (ram_mb, cpu_pct, player_count, tps_alert_msg) = {
             let mut instances = state.instances.write().await;
             if let Some(inst) = instances.get_mut(instance_id) {
                 inst.tps = Some(tps);
-                inst.ram_mb.unwrap_or(0)
+                let ram = inst.ram_mb.unwrap_or(0);
+                let cpu = inst.cpu_pct;
+                let pc = inst.players.len();
+                let alert = if let Some(a) = &inst.config.alerts {
+                    if a.enabled && tps < a.tps_min {
+                        inst.low_tps_streak += 1;
+                        if inst.low_tps_streak >= a.tps_consecutive {
+                            inst.low_tps_streak = 0;
+                            Some(format!("TPS dropped to {:.1} (threshold {:.1})", tps, a.tps_min))
+                        } else {
+                            None
+                        }
+                    } else {
+                        inst.low_tps_streak = 0;
+                        None
+                    }
+                } else {
+                    None
+                };
+                (ram, cpu, pc, alert)
             } else {
-                0
+                (0, None, 0, None)
             }
         };
         let _ = state.log_tx.send(WsEvent::Metrics {
             instance_id: instance_id.to_string(),
             ram_mb,
             tps: Some(tps),
+            cpu_pct,
         });
+        state.metrics_db.record_metric(
+            instance_id,
+            chrono::Utc::now().timestamp(),
+            Some(ram_mb),
+            Some(tps),
+            player_count,
+            cpu_pct,
+        );
+        if let Some(msg) = tps_alert_msg {
+            let _ = state.log_tx.send(WsEvent::HealthAlert {
+                instance_id: instance_id.to_string(),
+                kind: "tps".to_string(),
+                message: msg,
+            });
+        }
     }
 
     if let Some(player) = parse_player_event(line, "joined the game") {
@@ -320,6 +365,7 @@ async fn process_log_line(state: &AppState, instance_id: &str, line: &str) {
                 inst.players.insert(player.clone());
             }
         }
+        state.metrics_db.record_player_join(instance_id, &player, chrono::Utc::now().timestamp());
         let _ = state.log_tx.send(WsEvent::PlayerJoined {
             instance_id: instance_id.to_string(),
             player,
@@ -331,6 +377,7 @@ async fn process_log_line(state: &AppState, instance_id: &str, line: &str) {
                 inst.players.remove(&player);
             }
         }
+        state.metrics_db.record_player_leave(instance_id, &player, chrono::Utc::now().timestamp());
         let _ = state.log_tx.send(WsEvent::PlayerLeft {
             instance_id: instance_id.to_string(),
             player,

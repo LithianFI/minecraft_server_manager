@@ -29,6 +29,7 @@
       <button class="btn-outline" onclick="openFtbModal()">⬇ FTB</button>
       <button class="btn-outline" onclick="openAddModal()">+ Add Existing</button>
       <button class="btn-outline" onclick="openWhitelist()">Whitelist</button>
+      <button class="btn-outline" onclick="openDiscordNotifyModal()">Notifications</button>
     </div>
   </header>
   <main id="dashboard-main">
@@ -66,6 +67,7 @@
     <button class="tab-btn active" data-tab="logs"     onclick="switchTab('logs')">Logs</button>
     <button class="tab-btn"        data-tab="mods"     onclick="switchTab('mods')">Mods</button>
     <button class="tab-btn"        data-tab="backups"  onclick="switchTab('backups')">Backups</button>
+    <button class="tab-btn"        data-tab="stats"    onclick="switchTab('stats')">Stats</button>
     <button class="tab-btn"        data-tab="settings" onclick="switchTab('settings')">Settings</button>
   </nav>
 
@@ -77,13 +79,23 @@
         <button class="log-filter-btn"        data-level="warn"  onclick="setLogFilter('warn')">Warn</button>
         <button class="log-filter-btn"        data-level="error" onclick="setLogFilter('error')">Error</button>
       </div>
-      <input id="log-search" class="log-search" type="text" placeholder="Search logs…"
-             oninput="setLogSearch(this.value)" autocomplete="off" spellcheck="false">
+      <div class="log-search-wrap">
+        <input id="log-search" class="log-search" type="text" placeholder="Search logs…"
+               oninput="setLogSearch(this.value)" autocomplete="off" spellcheck="false">
+        <button id="btn-regex" class="log-tool-btn" onclick="toggleRegex()" title="Toggle regex search">.*</button>
+      </div>
+      <div class="log-tool-btns">
+        <button class="log-tool-btn" onclick="jumpToError()" title="Jump to next error">⚠</button>
+        <button class="log-tool-btn" onclick="downloadLog()" title="Download log">↓</button>
+      </div>
     </div>
     <div id="log-output"></div>
+    <div id="cmd-autocomplete" class="cmd-autocomplete hidden" role="listbox"></div>
+    <div id="macros-panel" class="macros-panel hidden"></div>
     <form class="cmd-bar" onsubmit="submitCmd(event)">
       <span class="prompt">&gt;</span>
       <input id="cmd-input" type="text" placeholder="Send command…" autocomplete="off" spellcheck="false">
+      <button type="button" id="btn-macros" class="btn-macros" onclick="toggleMacros()" title="Macros">⚡</button>
       <button type="submit">Send</button>
     </form>
   </div>
@@ -173,6 +185,99 @@
         </div>
       </section>
 
+      <!-- Disk Usage -->
+      <section class="settings-section">
+        <div class="settings-section-header">
+          <h4>Disk Usage</h4>
+          <button class="btn-outline btn-sm" onclick="loadDiskUsage(detailId)">Refresh</button>
+        </div>
+        <div id="disk-usage-content">
+          <div class="settings-loading">Loading…</div>
+        </div>
+      </section>
+
+      <!-- Automated Backups -->
+      <section class="settings-section">
+        <div class="settings-section-header">
+          <h4>Automated Backups</h4>
+          <span class="settings-note">Schedule change requires MSM restart</span>
+        </div>
+        <div class="props-form">
+          <label class="prop-row prop-row-check">
+            <span class="prop-label">Enable automated backups</span>
+            <input id="backup-enabled" type="checkbox">
+          </label>
+          <label class="prop-row">
+            <span class="prop-label">Schedule (cron)</span>
+            <input id="backup-schedule" type="text" placeholder="0 3 * * * (daily at 3am)" class="prop-input">
+          </label>
+          <label class="prop-row">
+            <span class="prop-label">Keep last N backups</span>
+            <input id="backup-keep" type="number" min="1" max="100" value="10" class="prop-input-sm">
+          </label>
+          <label class="prop-row prop-row-check">
+            <span class="prop-label">World files only</span>
+            <input id="backup-world-only" type="checkbox">
+            <span class="prop-hint">Skip server JARs, configs — back up only world data</span>
+          </label>
+        </div>
+        <div class="settings-actions">
+          <button class="btn-primary" onclick="saveBackupConfig()">Save Backup Settings</button>
+          <span id="backup-cfg-msg" class="settings-msg hidden"></span>
+        </div>
+      </section>
+
+      <!-- Health Alerts -->
+      <section class="settings-section">
+        <div class="settings-section-header">
+          <h4>Health Alerts</h4>
+          <span class="settings-note">Sends Discord notifications when thresholds are crossed</span>
+        </div>
+        <div class="props-form">
+          <label class="prop-row prop-row-check">
+            <span class="prop-label">Enable alerts</span>
+            <input id="alert-enabled" type="checkbox">
+          </label>
+          <label class="prop-row">
+            <span class="prop-label">Min TPS threshold</span>
+            <input id="alert-tps-min" type="number" min="1" max="20" step="0.5" value="15" class="prop-input-sm">
+          </label>
+          <label class="prop-row">
+            <span class="prop-label">Consecutive low-TPS readings</span>
+            <input id="alert-tps-consecutive" type="number" min="1" max="10" value="3" class="prop-input-sm">
+          </label>
+          <label class="prop-row">
+            <span class="prop-label">RAM alert threshold (%)</span>
+            <input id="alert-ram-pct" type="number" min="50" max="99" value="90" class="prop-input-sm">
+          </label>
+          <label class="prop-row">
+            <span class="prop-label">Max RAM (MB, for % calc)</span>
+            <input id="alert-max-ram" type="number" min="0" value="0" class="prop-input-sm">
+            <span class="prop-hint">Set to match your -Xmx value</span>
+          </label>
+        </div>
+        <div class="settings-actions">
+          <button class="btn-primary" onclick="saveAlertsConfig()">Save Alert Settings</button>
+          <span id="alerts-cfg-msg" class="settings-msg hidden"></span>
+        </div>
+      </section>
+
+      <!-- Scheduled Commands -->
+      <section class="settings-section">
+        <div class="settings-section-header">
+          <h4>Scheduled Commands</h4>
+          <span class="settings-note">Commands sent to the server at a fixed interval while running</span>
+        </div>
+        <div id="schedules-list"></div>
+        <div class="schedule-add-form">
+          <input id="sched-name"     type="text"   placeholder="Name (e.g. save-all)"  class="prop-input">
+          <input id="sched-cmd"      type="text"   placeholder="Command (e.g. save-all)" class="prop-input">
+          <input id="sched-interval" type="number" min="10" placeholder="Interval (secs)" class="prop-input-sm">
+          <button class="btn-primary btn-sm" onclick="addSchedule()">Add</button>
+        </div>
+        <span id="schedules-msg" class="settings-msg hidden"></span>
+      </section>
+
     </div>
   </div>
 
@@ -182,6 +287,36 @@
       <span id="backup-status-msg" class="backup-msg hidden"></span>
     </div>
     <div id="backup-list"></div>
+  </div>
+
+  <div id="tab-stats" class="tab-panel hidden">
+    <div class="stats-toolbar">
+      <span class="stats-label">Window:</span>
+      <button class="stats-window-btn" data-w="1h"  onclick="setStatsWindow('1h')">1H</button>
+      <button class="stats-window-btn active" data-w="24h" onclick="setStatsWindow('24h')">24H</button>
+      <button class="stats-window-btn" data-w="7d"  onclick="setStatsWindow('7d')">7D</button>
+    </div>
+    <div id="stats-summary" class="stats-summary"></div>
+    <div class="stats-charts">
+      <div class="stats-chart-wrap">
+        <div class="stats-chart-label">TPS</div>
+        <div class="stats-chart-container"><canvas id="chart-tps"></canvas></div>
+      </div>
+      <div class="stats-chart-wrap">
+        <div class="stats-chart-label">RAM (MB)</div>
+        <div class="stats-chart-container"><canvas id="chart-ram"></canvas></div>
+      </div>
+      <div class="stats-chart-wrap">
+        <div class="stats-chart-label">Players Online</div>
+        <div class="stats-chart-container"><canvas id="chart-players"></canvas></div>
+      </div>
+      <div class="stats-chart-wrap">
+        <div class="stats-chart-label">CPU %</div>
+        <div class="stats-chart-container"><canvas id="chart-cpu"></canvas></div>
+      </div>
+    </div>
+    <div id="stats-events"></div>
+    <div id="stats-players"></div>
   </div>
 </div>
 
@@ -557,6 +692,52 @@
   </div>
 </div>
 
+<!-- ══════════════════════ DISCORD NOTIFICATIONS MODAL ══ -->
+<div id="discord-notify-modal" class="modal-backdrop hidden" onclick="discordNotifyBackdropClose(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Discord Notifications</h3>
+      <button class="btn-close" onclick="closeDiscordNotifyModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="settings-hint">Choose which events the Discord bot announces in your channel.</p>
+      <div class="props-form discord-toggles">
+        <label class="prop-row prop-row-check">
+          <span class="prop-label">Server started</span>
+          <input type="checkbox" id="dn-started">
+        </label>
+        <label class="prop-row prop-row-check">
+          <span class="prop-label">Server stopped</span>
+          <input type="checkbox" id="dn-stopped">
+        </label>
+        <label class="prop-row prop-row-check">
+          <span class="prop-label">Server crashed</span>
+          <input type="checkbox" id="dn-crashed">
+        </label>
+        <label class="prop-row prop-row-check">
+          <span class="prop-label">Backup completed</span>
+          <input type="checkbox" id="dn-backup-done">
+        </label>
+        <label class="prop-row prop-row-check">
+          <span class="prop-label">Backup failed</span>
+          <input type="checkbox" id="dn-backup-failed">
+        </label>
+        <label class="prop-row prop-row-check">
+          <span class="prop-label">Health alerts (TPS / RAM)</span>
+          <input type="checkbox" id="dn-health-alerts">
+        </label>
+      </div>
+      <span id="discord-notify-msg" class="settings-msg hidden"></span>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-outline" onclick="closeDiscordNotifyModal()">Cancel</button>
+      <button class="btn-primary" onclick="saveDiscordNotify()">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

@@ -5,7 +5,7 @@ use poise::serenity_prelude as serenity;
 
 use crate::{
     backup,
-    config::DiscordConfig,
+    config::{DiscordConfig, DiscordNotifyConfig},
     instance,
     state::{AppState, InstanceStatus, WsEvent},
 };
@@ -444,24 +444,33 @@ async fn notify_task(
     http: Arc<serenity::Http>,
     channel_id: u64,
     mut rx: broadcast::Receiver<WsEvent>,
+    notify: Arc<tokio::sync::RwLock<DiscordNotifyConfig>>,
 ) {
     let channel = serenity::ChannelId::new(channel_id);
     loop {
         match rx.recv().await {
             Ok(event) => {
+                let cfg = notify.read().await.clone();
                 let msg: Option<String> = match &event {
                     WsEvent::StateChanged { instance_id, status } => match status {
-                        InstanceStatus::Running => Some(format!("🟢 **{}** is now running.", instance_id)),
-                        InstanceStatus::Stopped => Some(format!("⚫ **{}** has stopped.", instance_id)),
-                        InstanceStatus::Crashed => Some(format!("🔴 **{}** has crashed!", instance_id)),
+                        InstanceStatus::Running if cfg.server_started =>
+                            Some(format!("🟢 **{}** is now running.", instance_id)),
+                        InstanceStatus::Stopped if cfg.server_stopped =>
+                            Some(format!("⚫ **{}** has stopped.", instance_id)),
+                        InstanceStatus::Crashed if cfg.server_crashed =>
+                            Some(format!("🔴 **{}** has crashed!", instance_id)),
                         _ => None,
                     },
-                    WsEvent::BackupDone { instance_id, filename, size_bytes } => {
+                    WsEvent::BackupDone { instance_id, filename, size_bytes } if cfg.backup_done => {
                         let mb = *size_bytes as f64 / 1_048_576.0;
                         Some(format!("💾 Backup of **{}** done — `{}` ({:.1} MB)", instance_id, filename, mb))
                     }
-                    WsEvent::BackupFailed { instance_id, error } =>
+                    WsEvent::BackupFailed { instance_id, error } if cfg.backup_failed =>
                         Some(format!("⚠️ Backup of **{}** failed: {}", instance_id, error)),
+                    WsEvent::HealthAlert { instance_id, kind, message } if cfg.health_alerts => {
+                        let icon = if kind == "tps" { "⚠️" } else { "🔥" };
+                        Some(format!("{} **{}** health alert: {}", icon, instance_id, message))
+                    }
                     _ => None,
                 };
                 if let Some(text) = msg {
@@ -492,7 +501,7 @@ async fn run_bot(state: Arc<AppState>, config: DiscordConfig) {
     // Subscribe before connecting so we don't miss early events
     let notify_rx = state.log_tx.subscribe();
     let http = Arc::new(serenity::Http::new(&token));
-    tokio::spawn(notify_task(http, channel_id, notify_rx));
+    tokio::spawn(notify_task(http, channel_id, notify_rx, state.discord_notify.clone()));
 
     let state_data = state.clone();
     let framework = poise::Framework::builder()

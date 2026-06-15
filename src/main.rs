@@ -7,9 +7,11 @@ mod ftb;
 mod instance;
 mod java;
 mod metrics;
+mod metrics_db;
 mod mod_mgr;
 mod modpack;
 mod restart;
+mod scheduler;
 mod setup;
 mod sse;
 mod state;
@@ -57,12 +59,30 @@ async fn main() {
 
     let (log_tx, _) = broadcast::channel(2048);
 
+    let metrics_db = metrics_db::MetricsDb::open().unwrap_or_else(|e| {
+        tracing::error!("Failed to open metrics DB: {}. Stats will not be recorded.", e);
+        // Create an in-memory fallback so the rest of the app still works
+        metrics_db::MetricsDb::open_memory()
+    });
+
+    // Delete data older than 30 days on startup
+    {
+        let cutoff = chrono::Utc::now().timestamp() - 30 * 86400;
+        metrics_db.cleanup_old(cutoff);
+    }
+
+    let discord_notify = Arc::new(RwLock::new(
+        global_config.discord.as_ref().map(|d| d.notify.clone()).unwrap_or_default(),
+    ));
+
     let state = Arc::new(AppState {
         instances: RwLock::new(instances),
         processes: Mutex::new(Default::default()),
         log_tx,
         global_config,
+        discord_notify,
         http_client: reqwest::Client::new(),
+        metrics_db,
     });
 
     let port = state
@@ -112,6 +132,17 @@ async fn main() {
         .route("/api/instances/{id}/java-config", post(api::set_java_config))
         .route("/api/ftb/search", get(api::ftb_search))
         .route("/api/setup/import-ftb", post(api::import_ftb_pack))
+        .route("/api/instances/{id}/disk-usage", get(api::get_disk_usage))
+        .route("/api/instances/{id}/metrics", get(api::get_metrics_history))
+        .route("/api/instances/{id}/player-stats", get(api::get_player_stats))
+        .route("/api/instances/{id}/alerts-config", get(api::get_alerts_config).post(api::update_alerts_config))
+        .route("/api/instances/{id}/schedules", get(api::get_schedules).post(api::add_schedule))
+        .route("/api/instances/{id}/schedules/{name}", axum::routing::delete(api::delete_schedule))
+        .route("/api/instances/{id}/players/{player}/kick", post(api::kick_player))
+        .route("/api/instances/{id}/players/{player}/op",   post(api::op_player))
+        .route("/api/instances/{id}/players/{player}/deop", post(api::deop_player))
+        .route("/api/instances/{id}/backup-config", get(api::get_backup_config).post(api::update_backup_config))
+        .route("/api/discord-notify", get(api::get_discord_notify).post(api::update_discord_notify))
         .with_state(state.clone())
         .layer(CorsLayer::permissive());
 
@@ -120,6 +151,7 @@ async fn main() {
 
     backup::start_schedulers(state.clone());
     restart::start_restart_schedulers(state.clone());
+    scheduler::start_command_schedulers(state.clone());
     start_instance_watcher(state.clone());
 
     // Sync master whitelist and bans to all instance directories on startup

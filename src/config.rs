@@ -14,6 +14,37 @@ pub struct DiscordConfig {
     pub token: String,
     pub guild_id: u64,
     pub channel_id: u64,
+    #[serde(default)]
+    pub notify: DiscordNotifyConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DiscordNotifyConfig {
+    #[serde(default = "default_true")]
+    pub server_started: bool,
+    #[serde(default = "default_true")]
+    pub server_stopped: bool,
+    #[serde(default = "default_true")]
+    pub server_crashed: bool,
+    #[serde(default = "default_true")]
+    pub backup_done: bool,
+    #[serde(default = "default_true")]
+    pub backup_failed: bool,
+    #[serde(default = "default_true")]
+    pub health_alerts: bool,
+}
+
+impl Default for DiscordNotifyConfig {
+    fn default() -> Self {
+        Self {
+            server_started: true,
+            server_stopped: true,
+            server_crashed: true,
+            backup_done: true,
+            backup_failed: true,
+            health_alerts: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -27,7 +58,39 @@ pub struct InstanceConfig {
     pub server: ServerConfig,
     pub backup: Option<BackupConfig>,
     pub restart: Option<RestartConfig>,
+    pub alerts: Option<AlertConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub schedules: Vec<ScheduleEntry>,
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct AlertConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_tps_min")]
+    pub tps_min: f32,
+    #[serde(default = "default_tps_consecutive")]
+    pub tps_consecutive: u32,
+    #[serde(default = "default_ram_pct_max")]
+    pub ram_pct_max: u32,
+    #[serde(default)]
+    pub max_ram_mb: u64,
+}
+
+fn default_tps_min() -> f32 { 15.0 }
+fn default_tps_consecutive() -> u32 { 3 }
+fn default_ram_pct_max() -> u32 { 90 }
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ScheduleEntry {
+    pub name: String,
+    pub interval_secs: u64,
+    pub command: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool { true }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct RestartConfig {
@@ -86,6 +149,13 @@ impl GlobalConfig {
         let path = data_dir().join("config.toml");
         let content = std::fs::read_to_string(path)?;
         Ok(toml::from_str(&content)?)
+    }
+
+    pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let path = data_dir().join("config.toml");
+        let content = toml::to_string_pretty(self)?;
+        std::fs::write(path, content)?;
+        Ok(())
     }
 }
 
@@ -163,6 +233,9 @@ pub async fn load_instance_dir(path: &std::path::Path) -> Option<(String, crate:
             ram_mb: None,
             tps: None,
             restart_attempts: 0,
+            cpu_pct: None,
+            low_tps_streak: 0,
+            high_ram_alerted: false,
         },
     ))
 }
@@ -213,6 +286,8 @@ fn auto_detect_config(dir: &std::path::Path) -> Option<InstanceConfig> {
             keep_count: 10,
             world_only: false,
         }),
+        alerts: None,
+        schedules: vec![],
     })
 }
 

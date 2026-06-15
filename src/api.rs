@@ -11,7 +11,7 @@ use crate::{
     backup::{self, BackupInfo},
     ban,
     ban::{BannedIp, BannedPlayer},
-    config::{data_dir, BackupConfig, InstanceConfig, InstanceMeta, RestartConfig, ServerConfig},
+    config::{data_dir, BackupConfig, DiscordNotifyConfig, InstanceConfig, InstanceMeta, RestartConfig, ServerConfig},
     ftb, instance, mod_mgr, modpack, setup, whitelist,
     mod_mgr::{ModEntry, ModSearchHit, ModUpdate},
     whitelist::WhitelistEntry,
@@ -158,6 +158,8 @@ pub async fn add_instance(
             keep_count: 10,
             world_only: false,
         }),
+        alerts: None,
+        schedules: vec![],
     };
 
     let toml_str = toml::to_string_pretty(&config)
@@ -178,6 +180,9 @@ pub async fn add_instance(
         ram_mb: None,
         tps: None,
         restart_attempts: 0,
+        cpu_pct: None,
+        low_tps_streak: 0,
+        high_ram_alerted: false,
     };
 
     let info = InstanceInfo::from(&inst_state);
@@ -949,6 +954,71 @@ pub async fn update_restart_config(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// ── Disk usage ────────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct DiskUsage {
+    pub world_size_bytes: u64,
+    pub server_dir_size_bytes: u64,
+    pub backup_size_bytes: u64,
+}
+
+pub async fn get_disk_usage(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<DiskUsage>> {
+    let (server_path, id_clone) = {
+        let instances = state.instances.read().await;
+        let inst = instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+        (inst.config.server.path.clone(), id.clone())
+    };
+
+    let usage = tokio::task::spawn_blocking(move || {
+        let level_name = parse_server_properties(&server_path)
+            .ok()
+            .and_then(|props| props.get("level-name").cloned())
+            .unwrap_or_else(|| "world".to_string());
+        let world_size = dir_size_bytes(&server_path.join(&level_name));
+        let server_dir_size = dir_size_bytes(&server_path);
+        let backup_size = backup::list_backups(&id_clone)
+            .iter()
+            .map(|b| b.size_bytes)
+            .sum();
+        DiskUsage {
+            world_size_bytes: world_size,
+            server_dir_size_bytes: server_dir_size,
+            backup_size_bytes: backup_size,
+        }
+    })
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(usage))
+}
+
+fn dir_size_bytes(path: &std::path::Path) -> u64 {
+    if !path.exists() {
+        return 0;
+    }
+    let mut total = 0u64;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_symlink() {
+                continue;
+            }
+            if p.is_dir() {
+                total += dir_size_bytes(&p);
+            } else if let Ok(meta) = entry.metadata() {
+                total += meta.len();
+            }
+        }
+    }
+    total
+}
+
 fn slugify(s: &str) -> String {
     s.to_lowercase()
         .chars()
@@ -958,4 +1028,445 @@ fn slugify(s: &str) -> String {
         .filter(|p| !p.is_empty())
         .collect::<Vec<_>>()
         .join("-")
+}
+
+// ── Metrics history ───────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct MetricPoint {
+    pub ts: i64,
+    pub ram_mb: Option<u64>,
+    pub tps: Option<f64>,
+    pub players: i64,
+    pub cpu_pct: Option<f64>,
+}
+
+#[derive(Serialize)]
+pub struct EventPoint {
+    pub ts: i64,
+    pub event: String,
+}
+
+#[derive(Serialize)]
+pub struct MetricsSummary {
+    pub crash_count: usize,
+    pub peak_players: i64,
+    pub avg_tps: Option<f64>,
+    pub avg_ram_mb: Option<f64>,
+    pub uptime_pct: f64,
+}
+
+#[derive(Serialize)]
+pub struct MetricsHistoryResponse {
+    pub metrics: Vec<MetricPoint>,
+    pub events: Vec<EventPoint>,
+    pub summary: MetricsSummary,
+}
+
+pub async fn get_metrics_history(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> ApiResult<Json<MetricsHistoryResponse>> {
+    // Validate instance exists
+    {
+        let instances = state.instances.read().await;
+        instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+    }
+
+    let window_secs: i64 = match params.get("window").map(|s| s.as_str()) {
+        Some("1h") => 3600,
+        Some("7d") => 604_800,
+        _ => 86_400, // default 24h
+    };
+
+    let since = chrono::Utc::now().timestamp() - window_secs;
+    let db = state.metrics_db.clone();
+
+    let (metrics_rows, event_rows) = tokio::task::spawn_blocking(move || {
+        (db.query_metrics(&id, since), db.query_events(&id, since))
+    })
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let metrics: Vec<MetricPoint> = metrics_rows
+        .iter()
+        .map(|r| MetricPoint {
+            ts: r.timestamp,
+            ram_mb: r.ram_mb,
+            tps: r.tps,
+            players: r.player_count,
+            cpu_pct: r.cpu_pct,
+        })
+        .collect();
+
+    let events: Vec<EventPoint> = event_rows
+        .iter()
+        .map(|r| EventPoint {
+            ts: r.timestamp,
+            event: r.event_type.clone(),
+        })
+        .collect();
+
+    let crash_count = event_rows.iter().filter(|e| e.event_type == "crashed").count();
+    let peak_players = metrics_rows.iter().map(|r| r.player_count).max().unwrap_or(0);
+
+    let tps_values: Vec<f64> = metrics_rows.iter().filter_map(|r| r.tps).collect();
+    let avg_tps = if tps_values.is_empty() {
+        None
+    } else {
+        Some(tps_values.iter().sum::<f64>() / tps_values.len() as f64)
+    };
+
+    let ram_values: Vec<f64> = metrics_rows.iter().filter_map(|r| r.ram_mb).map(|v| v as f64).collect();
+    let avg_ram_mb = if ram_values.is_empty() {
+        None
+    } else {
+        Some(ram_values.iter().sum::<f64>() / ram_values.len() as f64)
+    };
+
+    // Uptime estimate: each metric row represents ~60s of uptime
+    let expected_rows = (window_secs / 60).max(1);
+    let uptime_pct = (metrics_rows.len() as f64 / expected_rows as f64 * 100.0).min(100.0);
+
+    Ok(Json(MetricsHistoryResponse {
+        metrics,
+        events,
+        summary: MetricsSummary {
+            crash_count,
+            peak_players,
+            avg_tps,
+            avg_ram_mb,
+            uptime_pct,
+        },
+    }))
+}
+
+// ── Player stats ──────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct PlayerStatsEntry {
+    pub player: String,
+    pub sessions: i64,
+    pub total_secs: i64,
+    pub last_seen: i64,
+}
+
+#[derive(Serialize)]
+pub struct RecentSession {
+    pub player: String,
+    pub joined_at: i64,
+    pub left_at: Option<i64>,
+    pub duration_secs: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct PlayerStatsResponse {
+    pub stats: Vec<PlayerStatsEntry>,
+    pub recent: Vec<RecentSession>,
+}
+
+pub async fn get_player_stats(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> ApiResult<Json<PlayerStatsResponse>> {
+    {
+        let instances = state.instances.read().await;
+        instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+    }
+    let window_secs: i64 = match params.get("window").map(|s| s.as_str()) {
+        Some("1h") => 3600,
+        Some("7d") => 604_800,
+        _ => 86_400,
+    };
+    let since = chrono::Utc::now().timestamp() - window_secs;
+    let db = state.metrics_db.clone();
+
+    let (stats_rows, session_rows) = tokio::task::spawn_blocking(move || {
+        (
+            db.query_player_stats(&id, since),
+            db.query_recent_sessions(&id, 20),
+        )
+    })
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(PlayerStatsResponse {
+        stats: stats_rows.into_iter().map(|r| PlayerStatsEntry {
+            player: r.player_name,
+            sessions: r.total_sessions,
+            total_secs: r.total_secs,
+            last_seen: r.last_seen,
+        }).collect(),
+        recent: session_rows.into_iter().map(|r| RecentSession {
+            player: r.player_name,
+            joined_at: r.joined_at,
+            left_at: r.left_at,
+            duration_secs: r.duration_secs,
+        }).collect(),
+    }))
+}
+
+// ── Alerts config ─────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct AlertConfigRequest {
+    pub enabled: bool,
+    pub tps_min: f32,
+    pub tps_consecutive: u32,
+    pub ram_pct_max: u32,
+    pub max_ram_mb: u64,
+}
+
+pub async fn get_alerts_config(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<crate::config::AlertConfig>> {
+    let instances = state.instances.read().await;
+    let inst = instances
+        .get(&id)
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+    Ok(Json(inst.config.alerts.clone().unwrap_or_default()))
+}
+
+pub async fn update_alerts_config(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<AlertConfigRequest>,
+) -> ApiResult<StatusCode> {
+    let instance_dir = {
+        let instances = state.instances.read().await;
+        instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?
+            .instance_dir.clone()
+    };
+    {
+        let mut instances = state.instances.write().await;
+        if let Some(inst) = instances.get_mut(&id) {
+            inst.config.alerts = Some(crate::config::AlertConfig {
+                enabled: req.enabled,
+                tps_min: req.tps_min,
+                tps_consecutive: req.tps_consecutive,
+                ram_pct_max: req.ram_pct_max,
+                max_ram_mb: req.max_ram_mb,
+            });
+            if let Ok(toml_str) = toml::to_string_pretty(&inst.config) {
+                let _ = std::fs::write(instance_dir.join("msm.toml"), toml_str);
+            }
+        }
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ── Schedules ─────────────────────────────────────────────────────────────────
+
+pub async fn get_schedules(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<crate::config::ScheduleEntry>>> {
+    let instances = state.instances.read().await;
+    let inst = instances
+        .get(&id)
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+    Ok(Json(inst.config.schedules.clone()))
+}
+
+#[derive(Deserialize)]
+pub struct ScheduleEntryRequest {
+    pub name: String,
+    pub interval_secs: u64,
+    pub command: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool { true }
+
+pub async fn add_schedule(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<ScheduleEntryRequest>,
+) -> ApiResult<StatusCode> {
+    if req.name.trim().is_empty() || req.command.trim().is_empty() || req.interval_secs == 0 {
+        return Err(err(StatusCode::BAD_REQUEST, "name, command and interval_secs are required"));
+    }
+    let instance_dir = {
+        let instances = state.instances.read().await;
+        instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?
+            .instance_dir.clone()
+    };
+    {
+        let mut instances = state.instances.write().await;
+        if let Some(inst) = instances.get_mut(&id) {
+            // Replace if same name, otherwise append
+            let entry = crate::config::ScheduleEntry {
+                name: req.name.clone(),
+                interval_secs: req.interval_secs,
+                command: req.command,
+                enabled: req.enabled,
+            };
+            if let Some(pos) = inst.config.schedules.iter().position(|s| s.name == req.name) {
+                inst.config.schedules[pos] = entry;
+            } else {
+                inst.config.schedules.push(entry);
+            }
+            if let Ok(toml_str) = toml::to_string_pretty(&inst.config) {
+                let _ = std::fs::write(instance_dir.join("msm.toml"), toml_str);
+            }
+        }
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn delete_schedule(
+    State(state): State<Arc<AppState>>,
+    Path((id, name)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let instance_dir = {
+        let instances = state.instances.read().await;
+        instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?
+            .instance_dir.clone()
+    };
+    {
+        let mut instances = state.instances.write().await;
+        if let Some(inst) = instances.get_mut(&id) {
+            inst.config.schedules.retain(|s| s.name != name);
+            if let Ok(toml_str) = toml::to_string_pretty(&inst.config) {
+                let _ = std::fs::write(instance_dir.join("msm.toml"), toml_str);
+            }
+        }
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ── Player actions ────────────────────────────────────────────────────────────
+
+pub async fn kick_player(
+    State(state): State<Arc<AppState>>,
+    Path((id, player)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    send_player_cmd(&state, &id, format!("kick {}", player)).await
+}
+
+pub async fn op_player(
+    State(state): State<Arc<AppState>>,
+    Path((id, player)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    send_player_cmd(&state, &id, format!("op {}", player)).await
+}
+
+pub async fn deop_player(
+    State(state): State<Arc<AppState>>,
+    Path((id, player)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    send_player_cmd(&state, &id, format!("deop {}", player)).await
+}
+
+async fn send_player_cmd(state: &Arc<AppState>, id: &str, cmd: String) -> ApiResult<StatusCode> {
+    let processes = state.processes.lock().await;
+    match processes.get(id) {
+        Some(handle) => {
+            handle.stdin_tx.send(cmd)
+                .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Failed to send command"))?;
+            Ok(StatusCode::NO_CONTENT)
+        }
+        None => Err(err(StatusCode::BAD_REQUEST, "Instance is not running")),
+    }
+}
+
+// ── Backup config ─────────────────────────────────────────────────────────────
+
+pub async fn get_backup_config(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<impl IntoResponse> {
+    let instances = state.instances.read().await;
+    let inst = instances
+        .get(&id)
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+    let cfg = inst.config.backup.clone().unwrap_or(BackupConfig {
+        enabled: false,
+        schedule: None,
+        keep_count: 10,
+        world_only: false,
+    });
+    Ok(Json(cfg))
+}
+
+#[derive(Deserialize)]
+pub struct BackupConfigRequest {
+    pub enabled: bool,
+    pub schedule: Option<String>,
+    pub keep_count: usize,
+    pub world_only: bool,
+}
+
+pub async fn update_backup_config(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<BackupConfigRequest>,
+) -> ApiResult<StatusCode> {
+    let instance_dir = {
+        let instances = state.instances.read().await;
+        instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?
+            .instance_dir.clone()
+    };
+
+    let new_cfg = BackupConfig {
+        enabled: req.enabled,
+        schedule: req.schedule.filter(|s| !s.trim().is_empty()),
+        keep_count: req.keep_count.max(1),
+        world_only: req.world_only,
+    };
+
+    {
+        let mut instances = state.instances.write().await;
+        if let Some(inst) = instances.get_mut(&id) {
+            inst.config.backup = Some(new_cfg);
+            if let Ok(toml_str) = toml::to_string_pretty(&inst.config) {
+                let _ = std::fs::write(instance_dir.join("msm.toml"), toml_str);
+            }
+        }
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ── Discord notification toggles ──────────────────────────────────────────────
+
+pub async fn get_discord_notify(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let cfg = state.discord_notify.read().await.clone();
+    Json(cfg)
+}
+
+pub async fn update_discord_notify(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<DiscordNotifyConfig>,
+) -> impl IntoResponse {
+    {
+        let mut cfg = state.discord_notify.write().await;
+        *cfg = body.clone();
+    }
+    // Persist to config.toml if Discord is configured
+    let mut gc = state.global_config.clone();
+    if let Some(ref mut dc) = gc.discord {
+        dc.notify = body;
+        if let Err(e) = gc.save() {
+            tracing::warn!("Failed to save discord notify config: {}", e);
+        }
+    }
+    StatusCode::NO_CONTENT
 }

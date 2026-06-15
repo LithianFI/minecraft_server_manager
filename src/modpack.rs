@@ -305,6 +305,8 @@ async fn do_import(state: &Arc<AppState>, req: ImportRequest) -> Result<(), Stri
             keep_count: 10,
             world_only: false,
         }),
+        alerts: None,
+        schedules: vec![],
     };
 
     let toml_str = toml::to_string_pretty(&config)
@@ -323,6 +325,9 @@ async fn do_import(state: &Arc<AppState>, req: ImportRequest) -> Result<(), Stri
         ram_mb: None,
         tps: None,
         restart_attempts: 0,
+        cpu_pct: None,
+        low_tps_streak: 0,
+        high_ram_alerted: false,
     };
 
     let info = crate::state::InstanceInfo::from(&inst_state);

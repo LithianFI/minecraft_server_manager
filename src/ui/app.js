@@ -7,6 +7,16 @@ let   detailId   = null
 let   logPinned  = true
 let   logFilter  = 'all'
 let   logSearch  = ''
+let   logRegex   = false
+
+// ─── Command history & macros ─────────────────────────────────────────────────
+let cmdHistory    = JSON.parse(localStorage.getItem('cmd_history') || '[]')
+let cmdHistoryPos = -1
+let cmdMacros     = JSON.parse(localStorage.getItem('cmd_macros')  || '[]')
+let macrosOpen    = false
+
+// ─── Toasts ───────────────────────────────────────────────────────────────────
+let _toastId = 0
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', setupSSE)
@@ -46,15 +56,22 @@ function handleEvent(ev) {
     case 'state_changed': {
       const inst = instances.get(ev.instance_id)
       if (!inst) break
+      const prevStatus = inst.status
       inst.status = ev.status
       if (ev.status !== 'running' && ev.status !== 'starting') {
-        inst.ram_mb = null
-        inst.tps    = null
+        inst.ram_mb  = null
+        inst.tps     = null
+        inst.cpu_pct = null
       }
       updateCard(inst)
       if (detailId === ev.instance_id) {
         refreshDetail(inst)
         refreshMetricsBar(inst)
+      }
+      if (ev.status === 'crashed') {
+        showToast(inst.display_name, 'Server crashed', 'error')
+      } else if (ev.status === 'running' && prevStatus === 'starting') {
+        showToast(inst.display_name, 'Server started', 'success')
       }
       break
     }
@@ -65,6 +82,7 @@ function handleEvent(ev) {
       inst.players.push(ev.player)
       updateCard(inst)
       if (detailId === ev.instance_id) refreshPlayerBar(inst)
+      else showToast(ev.player + ' joined', inst.display_name, 'info', 4000)
       break
     }
 
@@ -74,6 +92,7 @@ function handleEvent(ev) {
       inst.players = inst.players.filter(p => p !== ev.player)
       updateCard(inst)
       if (detailId === ev.instance_id) refreshPlayerBar(inst)
+      else showToast(ev.player + ' left', inst.display_name, 'info', 4000)
       break
     }
 
@@ -81,12 +100,14 @@ function handleEvent(ev) {
       setBackupMsg(`Backup created (${fmtSize(ev.size_bytes)})`, 'success')
       document.getElementById('btn-create-backup').disabled = false
       if (ev.instance_id === detailId) loadBackups(detailId)
+      showToast(instances.get(ev.instance_id)?.display_name ?? ev.instance_id, `Backup created · ${fmtSize(ev.size_bytes)}`, 'success')
       break
     }
 
     case 'backup_failed': {
       setBackupMsg(`Backup failed: ${ev.error}`, 'error')
       document.getElementById('btn-create-backup').disabled = false
+      showToast(instances.get(ev.instance_id)?.display_name ?? ev.instance_id, `Backup failed: ${ev.error}`, 'error')
       break
     }
 
@@ -95,6 +116,7 @@ function handleEvent(ev) {
       if (!inst) break
       inst.ram_mb = ev.ram_mb
       if (ev.tps != null) inst.tps = ev.tps
+      if (ev.cpu_pct != null) inst.cpu_pct = ev.cpu_pct
       updateCard(inst)
       if (detailId === ev.instance_id) refreshMetricsBar(inst)
       break
@@ -107,6 +129,7 @@ function handleEvent(ev) {
         const ts = Math.floor(Date.now() / 1000)
         appendLogLine(`[MSM] Auto-restarting… (attempt ${ev.attempt}/${ev.max_attempts})`, ts)
       }
+      showToast(inst?.display_name ?? ev.instance_id, `Auto-restarting… (${ev.attempt}/${ev.max_attempts})`, 'warning')
       break
     }
 
@@ -176,8 +199,11 @@ function showDetail(id) {
   logPinned = true
   logFilter = 'all'
   logSearch = ''
+  logRegex  = false
   const searchEl = document.getElementById('log-search')
   if (searchEl) searchEl.value = ''
+  const regexBtn = document.getElementById('btn-regex')
+  if (regexBtn) regexBtn.classList.remove('active')
   document.querySelectorAll('.log-filter-btn').forEach(b => b.classList.toggle('active', b.dataset.level === 'all'))
   document.getElementById('view-dashboard').classList.add('hidden')
   document.getElementById('view-detail').classList.remove('hidden')
@@ -329,11 +355,30 @@ function refreshDetail(inst) {
   refreshMetricsBar(inst)
 }
 
+async function playerAction(instanceId, player, action) {
+  try {
+    await api('POST', `/api/instances/${instanceId}/players/${encodeURIComponent(player)}/${action}`)
+    showToast('Player action', `${action} sent to ${player}`, 'success', 3000)
+  } catch (e) {
+    showToast('Player action failed', e.message, 'error', 4000)
+  }
+}
+
 function refreshPlayerBar(inst) {
   const bar = document.getElementById('player-bar')
   if (!inst || inst.players.length === 0) { bar.classList.add('hidden'); return }
   bar.classList.remove('hidden')
-  bar.innerHTML = `<span class="label">Online:</span>` + inst.players.map(p => `<span class="player-tag">${esc(p)}</span>`).join('')
+  const isRunning = inst.status === 'running'
+  bar.innerHTML = `<span class="label">Online:</span>` + inst.players.map(p => `
+    <span class="player-tag-wrap">
+      <span class="player-tag">${esc(p)}</span>
+      ${isRunning ? `
+        <span class="player-actions">
+          <button class="player-action-btn" onclick="playerAction(${JSON.stringify(inst.id)},${JSON.stringify(p)},'kick')" title="Kick">✕</button>
+          <button class="player-action-btn" onclick="playerAction(${JSON.stringify(inst.id)},${JSON.stringify(p)},'op')" title="Op">★</button>
+          <button class="player-action-btn" onclick="playerAction(${JSON.stringify(inst.id)},${JSON.stringify(p)},'deop')" title="Deop">☆</button>
+        </span>` : ''}
+    </span>`).join('')
 }
 
 function refreshMetricsBar(inst) {
@@ -345,6 +390,10 @@ function refreshMetricsBar(inst) {
   let html = `<span class="metric-chip">💾 ${ram}</span>`
   if (inst.tps != null) {
     html += `<span class="metric-chip metric-tps ${tpsClass(inst.tps)}">⟳ ${inst.tps.toFixed(1)} TPS</span>`
+  }
+  if (inst.cpu_pct != null) {
+    const cpuCls = inst.cpu_pct >= 90 ? 'metric-bad' : inst.cpu_pct >= 70 ? 'metric-warn' : ''
+    html += `<span class="metric-chip ${cpuCls}">⚡ ${inst.cpu_pct.toFixed(1)}%</span>`
   }
   bar.innerHTML = html
 }
@@ -375,7 +424,8 @@ function switchTab(name) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('hidden', p.id !== 'tab-' + name))
   if (name === 'backups'  && detailId) renderBackups()
   if (name === 'mods'     && detailId) renderMods()
-  if (name === 'settings' && detailId) loadSettings(detailId)
+  if (name === 'stats'    && detailId) loadStats(detailId)
+  if (name === 'settings' && detailId) { loadSettings(detailId); loadDiskUsage(detailId); loadBackupConfig(detailId); loadAlertsConfig(detailId); loadSchedules(detailId) }
 }
 
 // ─── Log view ─────────────────────────────────────────────────────────────────
@@ -386,7 +436,13 @@ function linePassesFilter(line) {
     if (logFilter === 'warn'  && level !== 'log-warn' && level !== 'log-error') return false
     if (logFilter === 'info'  && level === 'log-debug') return false
   }
-  if (logSearch && !line.toLowerCase().includes(logSearch.toLowerCase())) return false
+  if (logSearch) {
+    if (logRegex) {
+      try { if (!new RegExp(logSearch, 'i').test(line)) return false } catch { return false }
+    } else {
+      if (!line.toLowerCase().includes(logSearch.toLowerCase())) return false
+    }
+  }
   return true
 }
 
@@ -425,6 +481,207 @@ function setLogSearch(value) {
   renderLogs()
 }
 
+function toggleRegex() {
+  logRegex = !logRegex
+  document.getElementById('btn-regex').classList.toggle('active', logRegex)
+  renderLogs()
+}
+
+function jumpToError() {
+  const el = document.getElementById('log-output')
+  if (!el) return
+  const lines = el.querySelectorAll('.log-error')
+  if (!lines.length) return
+  // Find the next error after current scroll position
+  const scrollTop = el.scrollTop
+  let target = lines[0]
+  for (const ln of lines) {
+    if (ln.offsetTop > scrollTop + 10) { target = ln; break }
+  }
+  target.scrollIntoView({ block: 'center' })
+}
+
+function downloadLog() {
+  const buf = detailId ? (logs.get(detailId) ?? []) : []
+  if (!buf.length) return
+  const text = buf.map(({ line }) => line).join('\n')
+  const blob = new Blob([text], { type: 'text/plain' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = `${detailId || 'server'}-log.txt`
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
+// ─── Command autocomplete ─────────────────────────────────────────────────────
+
+const MC_COMMANDS = [
+  // Server management
+  { cmd: 'stop',          usage: 'stop',                                              desc: 'Stop the server gracefully' },
+  { cmd: 'restart',       usage: 'restart',                                           desc: 'Restart the server (if supported)' },
+  { cmd: 'save-all',      usage: 'save-all [flush]',                                  desc: 'Force-save all chunks to disk' },
+  { cmd: 'save-on',       usage: 'save-on',                                           desc: 'Re-enable auto-saving' },
+  { cmd: 'save-off',      usage: 'save-off',                                          desc: 'Disable auto-saving (useful before backups)' },
+  { cmd: 'reload',        usage: 'reload [target]',                                   desc: 'Reload datapacks / Fabric mods' },
+  { cmd: 'debug',         usage: 'debug <start|stop|report|function>',                desc: 'Control the server profiler' },
+  { cmd: 'perf',          usage: 'perf <start|stop>',                                 desc: 'Start/stop performance profiling' },
+  { cmd: 'jfr',           usage: 'jfr <start|stop>',                                  desc: 'Control JVM Flight Recorder' },
+  // Players
+  { cmd: 'list',          usage: 'list [uuids]',                                      desc: 'List online players (and optionally their UUIDs)' },
+  { cmd: 'say',           usage: 'say <message>',                                     desc: 'Broadcast a message to all players' },
+  { cmd: 'tell',          usage: 'tell <player> <message>',                           desc: 'Send a private message to a player' },
+  { cmd: 'msg',           usage: 'msg <player> <message>',                            desc: 'Send a private message (alias for tell)' },
+  { cmd: 'me',            usage: 'me <action>',                                       desc: 'Broadcast an action in chat' },
+  { cmd: 'kick',          usage: 'kick <player> [reason]',                            desc: 'Kick a player from the server' },
+  { cmd: 'ban',           usage: 'ban <player> [reason]',                             desc: 'Ban a player by name' },
+  { cmd: 'ban-ip',        usage: 'ban-ip <address|player> [reason]',                  desc: 'Ban a player by IP address' },
+  { cmd: 'pardon',        usage: 'pardon <player>',                                   desc: 'Unban a player' },
+  { cmd: 'pardon-ip',     usage: 'pardon-ip <address>',                               desc: 'Unban an IP address' },
+  { cmd: 'op',            usage: 'op <player>',                                       desc: 'Grant operator permissions to a player' },
+  { cmd: 'deop',          usage: 'deop <player>',                                     desc: 'Revoke operator permissions from a player' },
+  { cmd: 'whitelist',     usage: 'whitelist <add|remove|list|on|off|reload> [player]', desc: 'Manage the server whitelist' },
+  // Teleport & world
+  { cmd: 'tp',            usage: 'tp <dest> | tp <x> <y> <z> | tp <from> <to>',       desc: 'Teleport a player or entity' },
+  { cmd: 'teleport',      usage: 'teleport <dest> | tp <x> <y> <z>',                 desc: 'Teleport (alias for tp)' },
+  { cmd: 'spawnpoint',    usage: 'spawnpoint [player] [x y z] [angle]',               desc: 'Set a player\'s spawn point' },
+  { cmd: 'setworldspawn', usage: 'setworldspawn [x y z] [angle]',                     desc: 'Set the world\'s spawn point' },
+  { cmd: 'time',          usage: 'time <set|add|query> <value|day|night|noon|midnight>', desc: 'Get or change the world time' },
+  { cmd: 'weather',       usage: 'weather <clear|rain|thunder> [duration]',            desc: 'Change the weather' },
+  { cmd: 'difficulty',    usage: 'difficulty <peaceful|easy|normal|hard>',             desc: 'Set the game difficulty' },
+  { cmd: 'gamerule',      usage: 'gamerule [rule] [value]',                            desc: 'Get or set a game rule (e.g. keepInventory, doDaylightCycle)' },
+  { cmd: 'worldborder',   usage: 'worldborder <add|center|damage|get|set|warning>',    desc: 'Manage the world border' },
+  { cmd: 'locate',        usage: 'locate <structure|biome|poi> <type>',                desc: 'Find the nearest structure, biome, or POI' },
+  { cmd: 'spreadplayers', usage: 'spreadplayers <x z> <spread> <maxRange> <teams> <targets>', desc: 'Randomly scatter players' },
+  // Game mechanics
+  { cmd: 'gamemode',      usage: 'gamemode <survival|creative|adventure|spectator> [player]', desc: 'Set a player\'s game mode' },
+  { cmd: 'give',          usage: 'give <player> <item> [count]',                      desc: 'Give a player items' },
+  { cmd: 'clear',         usage: 'clear [player] [item] [count]',                     desc: 'Clear a player\'s inventory' },
+  { cmd: 'kill',          usage: 'kill [player|entity]',                              desc: 'Kill entity/player (defaults to command executor)' },
+  { cmd: 'effect',        usage: 'effect <give|clear> <target> [effect] [duration] [amp] [hide]', desc: 'Apply or remove status effects' },
+  { cmd: 'enchant',       usage: 'enchant <target> <enchantment> [level]',             desc: 'Enchant the held item' },
+  { cmd: 'experience',    usage: 'experience <add|set|query> <player> <amount> [points|levels]', desc: 'Modify player experience' },
+  { cmd: 'xp',            usage: 'xp <add|set|query> <player> <amount>',              desc: 'Modify XP (alias for experience)' },
+  { cmd: 'advancement',   usage: 'advancement <grant|revoke> <player> <everything|only|from|through|until> [advancement]', desc: 'Manage advancements' },
+  { cmd: 'recipe',        usage: 'recipe <give|take> <player> (*|<recipe>)',           desc: 'Unlock or lock crafting recipes' },
+  { cmd: 'attribute',     usage: 'attribute <target> <attribute> <get|base|modifier>', desc: 'Query or modify entity attributes' },
+  { cmd: 'trigger',       usage: 'trigger <objective> [add|set] [value]',             desc: 'Modify a trigger scoreboard objective' },
+  // Blocks & entities
+  { cmd: 'setblock',      usage: 'setblock <x> <y> <z> <block> [destroy|keep|replace]', desc: 'Place a single block' },
+  { cmd: 'fill',          usage: 'fill <x1 y1 z1> <x2 y2 z2> <block> [mode]',         desc: 'Fill a region with a block' },
+  { cmd: 'clone',         usage: 'clone <x1 y1 z1> <x2 y2 z2> <destX destY destZ>',   desc: 'Copy blocks from one region to another' },
+  { cmd: 'summon',        usage: 'summon <entity> [x y z] [nbt]',                      desc: 'Spawn an entity at a location' },
+  { cmd: 'data',          usage: 'data <get|merge|modify|remove> <entity|block|storage> ...', desc: 'Manipulate NBT data' },
+  { cmd: 'loot',          usage: 'loot <target> <source>',                             desc: 'Drop items from a loot table' },
+  // Scoreboards & teams
+  { cmd: 'scoreboard',    usage: 'scoreboard <objectives|players> ...',                desc: 'Manage scoreboard objectives and scores' },
+  { cmd: 'team',          usage: 'team <add|remove|empty|join|leave|list|modify> ...',  desc: 'Manage teams' },
+  { cmd: 'tag',           usage: 'tag <targets> <add|remove|list> [name]',             desc: 'Manage entity tags' },
+  { cmd: 'bossbar',       usage: 'bossbar <add|get|list|remove|set> ...',              desc: 'Manage boss bars' },
+  { cmd: 'title',         usage: 'title <player> <clear|reset|title|subtitle|actionbar|times> ...', desc: 'Display titles on screen' },
+  // Command execution
+  { cmd: 'execute',       usage: 'execute <if|unless|as|at|positioned|rotated|facing|align|anchored|in|on|store|run> ...', desc: 'Conditional/contextual command execution' },
+  { cmd: 'function',      usage: 'function <namespace:path>',                          desc: 'Run all commands in a .mcfunction file' },
+  { cmd: 'schedule',      usage: 'schedule <function|clear> <name> [time] [append|replace]', desc: 'Schedule a function to run later' },
+  // Forge / NeoForge
+  { cmd: 'forge tps',     usage: 'forge tps [dim]',                                   desc: 'Show TPS per dimension (Forge/NeoForge)' },
+  { cmd: 'forge gen',     usage: 'forge gen',                                          desc: 'Show chunk generation stats (Forge/NeoForge)' },
+  { cmd: 'forge track',   usage: 'forge track',                                        desc: 'Toggle entity/tile tracking report (Forge/NeoForge)' },
+  { cmd: 'forge config',  usage: 'forge config load <type> <id>',                     desc: 'Reload Forge config (Forge/NeoForge)' },
+  // Fabric
+  { cmd: 'fabric',        usage: 'fabric <dump-registry|mods|report|...>',             desc: 'Fabric server subcommands' },
+]
+
+let _acItems = []    // filtered MC_COMMANDS for current input
+let _acIdx   = -1    // currently highlighted index (-1 = none)
+
+function _acEl() { return document.getElementById('cmd-autocomplete') }
+
+function updateAutocomplete(raw) {
+  const val = raw.trimStart()
+
+  if (!val) { hideAutocomplete(); return }
+
+  // Match command prefix (before first space shows command list; after space shows arg hint for that command)
+  const spaceIdx = val.indexOf(' ')
+  const typed = spaceIdx === -1 ? val : val.slice(0, spaceIdx)
+  const lower = typed.toLowerCase()
+
+  if (spaceIdx !== -1) {
+    // User has typed a full command + space — show the single matching entry as an argument hint
+    const exact = MC_COMMANDS.filter(c => c.cmd.toLowerCase() === lower)
+    _acItems = exact
+  } else {
+    // Show all commands that start with what's typed
+    _acItems = MC_COMMANDS.filter(c => c.cmd.toLowerCase().startsWith(lower))
+  }
+
+  if (!_acItems.length) { hideAutocomplete(); return }
+
+  _acIdx = -1
+  _renderAutocomplete(lower)
+}
+
+function _renderAutocomplete(highlight) {
+  const el = _acEl()
+  if (!el) return
+  el.innerHTML = _acItems.map((item, i) => {
+    const hi = esc(item.cmd).replace(
+      new RegExp(`^(${esc(highlight)})`, 'i'),
+      '<mark>$1</mark>'
+    )
+    return `<div class="ac-item${i === _acIdx ? ' ac-selected' : ''}"
+                 role="option"
+                 onmousedown="applyAutocomplete(${i})"
+                 onmouseover="_acHover(${i})">
+      <span class="ac-cmd">${hi}</span>
+      <span class="ac-right">
+        <span class="ac-usage">${esc(item.usage)}</span>
+        <span class="ac-desc">${esc(item.desc)}</span>
+      </span>
+    </div>`
+  }).join('')
+  el.classList.remove('hidden')
+}
+
+function hideAutocomplete() {
+  _acItems = []
+  _acIdx   = -1
+  const el = _acEl()
+  if (el) el.classList.add('hidden')
+}
+
+function _acHover(i) {
+  if (_acIdx === i) return
+  _acIdx = i
+  _acEl().querySelectorAll('.ac-item').forEach((el, j) => el.classList.toggle('ac-selected', j === i))
+}
+
+function moveAutocomplete(dir) {
+  if (!_acItems.length) return false
+  _acIdx = (_acIdx + dir + _acItems.length) % _acItems.length
+  _acEl().querySelectorAll('.ac-item').forEach((el, i) => el.classList.toggle('ac-selected', i === _acIdx))
+  const sel = _acEl().querySelector('.ac-selected')
+  if (sel) sel.scrollIntoView({ block: 'nearest' })
+  return true
+}
+
+function applyAutocomplete(idx) {
+  const item = _acItems[idx ?? _acIdx]
+  if (!item) return
+  const input = document.getElementById('cmd-input')
+  // If user already typed past the command, only fill up to the command name + space
+  const val = input.value.trimStart()
+  const spaceIdx = val.indexOf(' ')
+  if (spaceIdx !== -1) {
+    // Already past the command word — leave what they typed after the space
+    input.value = item.cmd + ' ' + val.slice(spaceIdx + 1)
+  } else {
+    input.value = item.cmd + ' '
+  }
+  hideAutocomplete()
+  input.focus()
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const logEl = document.getElementById('log-output')
   if (logEl) {
@@ -432,6 +689,65 @@ document.addEventListener('DOMContentLoaded', () => {
       const { scrollTop, scrollHeight, clientHeight } = logEl
       logPinned = scrollHeight - scrollTop - clientHeight < 40
     })
+  }
+
+  const cmdInput = document.getElementById('cmd-input')
+  if (cmdInput) {
+    cmdInput.addEventListener('input', e => {
+      updateAutocomplete(e.target.value)
+    })
+
+    cmdInput.addEventListener('keydown', e => {
+      // Autocomplete takes priority when dropdown is visible
+      if (_acItems.length) {
+        if (e.key === 'ArrowUp') {
+          e.preventDefault()
+          moveAutocomplete(-1)
+          return
+        }
+        if (e.key === 'ArrowDown') {
+          e.preventDefault()
+          moveAutocomplete(1)
+          return
+        }
+        if (e.key === 'Tab') {
+          e.preventDefault()
+          applyAutocomplete(_acIdx === -1 ? 0 : _acIdx)
+          return
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          hideAutocomplete()
+          return
+        }
+      } else {
+        // History navigation (only when autocomplete is closed)
+        if (e.key === 'ArrowUp') {
+          e.preventDefault()
+          if (cmdHistoryPos < cmdHistory.length - 1) {
+            cmdHistoryPos++
+            cmdInput.value = cmdHistory[cmdHistoryPos]
+            setTimeout(() => cmdInput.setSelectionRange(cmdInput.value.length, cmdInput.value.length), 0)
+          }
+          return
+        }
+        if (e.key === 'ArrowDown') {
+          e.preventDefault()
+          if (cmdHistoryPos > 0) {
+            cmdHistoryPos--
+            cmdInput.value = cmdHistory[cmdHistoryPos]
+          } else if (cmdHistoryPos === 0) {
+            cmdHistoryPos = -1
+            cmdInput.value = ''
+          }
+          return
+        }
+      }
+      if (e.key !== 'Enter' && e.key !== 'Tab') cmdHistoryPos = -1
+    })
+
+    // Close autocomplete on blur (slight delay so mousedown on item fires first)
+    cmdInput.addEventListener('blur', () => setTimeout(hideAutocomplete, 120))
   }
 })
 
@@ -441,6 +757,13 @@ function submitCmd(e) {
   const cmd = input.value.trim()
   if (!cmd || !detailId) return
   input.value = ''
+  cmdHistoryPos = -1
+  hideAutocomplete()
+  if (cmdHistory[0] !== cmd) {
+    cmdHistory.unshift(cmd)
+    if (cmdHistory.length > 100) cmdHistory.pop()
+    localStorage.setItem('cmd_history', JSON.stringify(cmdHistory))
+  }
   api('POST', `/api/instances/${detailId}/cmd`, { command: cmd }).catch(() => {})
 }
 
@@ -1894,6 +2217,444 @@ function onUpdateFailed(instanceId, error) {
   document.getElementById('update-log-output').appendChild(errEl)
 }
 
+// ─── Toasts ───────────────────────────────────────────────────────────────────
+function showToast(title, msg, type = 'info', duration = 5000) {
+  const container = document.getElementById('toast-container')
+  if (!container) return
+  const id = ++_toastId
+  const icons = { success: '✓', warning: '⚠', error: '✕', info: '◈' }
+  const el = document.createElement('div')
+  el.className = `toast toast-${type}`
+  el.id = `toast-${id}`
+  el.innerHTML = `
+    <span class="toast-icon">${icons[type] ?? '●'}</span>
+    <div class="toast-body">
+      <div class="toast-title">${esc(title)}</div>
+      ${msg ? `<div class="toast-msg">${esc(msg)}</div>` : ''}
+    </div>
+    <button class="toast-close" onclick="dismissToast(${id})" type="button">✕</button>
+    <div class="toast-progress" style="animation-duration:${duration}ms"></div>`
+  container.appendChild(el)
+  setTimeout(() => dismissToast(id), duration)
+}
+
+function dismissToast(id) {
+  const el = document.getElementById('toast-' + id)
+  if (!el || el.classList.contains('removing')) return
+  el.classList.add('removing')
+  setTimeout(() => el.remove(), 200)
+}
+
+// ─── Command macros ───────────────────────────────────────────────────────────
+function toggleMacros() {
+  macrosOpen = !macrosOpen
+  document.getElementById('macros-panel')?.classList.toggle('hidden', !macrosOpen)
+  document.getElementById('btn-macros')?.classList.toggle('active', macrosOpen)
+  if (macrosOpen) renderMacros()
+}
+
+function renderMacros() {
+  const panel = document.getElementById('macros-panel')
+  if (!panel) return
+  const listHTML = cmdMacros.length
+    ? cmdMacros.map((m, i) => `
+        <div class="macro-row" onclick="runMacro(${i})">
+          <span class="macro-name">${esc(m.name)}</span>
+          <span class="macro-cmd">${esc(m.cmd)}</span>
+          <button class="macro-del" onclick="event.stopPropagation();deleteMacro(${i})" type="button" title="Delete">✕</button>
+        </div>`).join('')
+    : '<div class="macros-empty">No macros yet. Add one below.</div>'
+  panel.innerHTML = `
+    <div class="macros-panel-header"><span>MACROS</span></div>
+    <div class="macros-list">${listHTML}</div>
+    <div class="macros-add-row">
+      <input id="macro-name-input" type="text" placeholder="Name" autocomplete="off" maxlength="24"
+             onkeydown="if(event.key==='Enter')saveMacro()">
+      <input id="macro-cmd-input" type="text" placeholder="Command" autocomplete="off"
+             onkeydown="if(event.key==='Enter')saveMacro()">
+      <button class="btn-add-macro" onclick="saveMacro()" type="button">+</button>
+    </div>`
+}
+
+function saveMacro() {
+  const name = document.getElementById('macro-name-input')?.value.trim()
+  const cmd  = document.getElementById('macro-cmd-input')?.value.trim()
+  if (!name || !cmd) return
+  cmdMacros.push({ name, cmd })
+  localStorage.setItem('cmd_macros', JSON.stringify(cmdMacros))
+  renderMacros()
+}
+
+function deleteMacro(index) {
+  cmdMacros.splice(index, 1)
+  localStorage.setItem('cmd_macros', JSON.stringify(cmdMacros))
+  renderMacros()
+}
+
+function runMacro(index) {
+  const m = cmdMacros[index]
+  if (!m || !detailId) return
+  api('POST', `/api/instances/${detailId}/cmd`, { command: m.cmd }).catch(() => {})
+}
+
+// ─── Disk usage ───────────────────────────────────────────────────────────────
+async function loadDiskUsage(id) {
+  if (!id) return
+  const el = document.getElementById('disk-usage-content')
+  if (!el) return
+  el.innerHTML = '<div class="settings-loading">Computing…</div>'
+  try {
+    const data = await api('GET', `/api/instances/${id}/disk-usage`)
+    renderDiskUsage(data)
+  } catch (e) {
+    el.innerHTML = `<div class="settings-loading">${esc(e.message)}</div>`
+  }
+}
+
+function renderDiskUsage(data) {
+  const el = document.getElementById('disk-usage-content')
+  if (!el) return
+  const maxBytes = Math.max(data.server_dir_size_bytes, data.backup_size_bytes, 1)
+  function row(label, bytes, color) {
+    const pct = Math.min(100, (bytes / maxBytes) * 100).toFixed(1)
+    return `<div class="disk-row">
+      <span class="disk-label">${esc(label)}</span>
+      <div class="disk-bar-wrap"><div class="disk-bar" style="width:${pct}%;background:${color}"></div></div>
+      <span class="disk-size">${fmtSize(bytes)}</span>
+    </div>`
+  }
+  el.innerHTML = `<div class="disk-usage">
+    ${row('World',      data.world_size_bytes,      'var(--green)')}
+    ${row('Server dir', data.server_dir_size_bytes, 'var(--blue)')}
+    ${row('Backups',    data.backup_size_bytes,     'var(--amber)')}
+  </div>`
+}
+
+// ─── Stats tab ────────────────────────────────────────────────────────────────
+let statsWindow = '24h'
+const _charts = {}
+
+function setStatsWindow(w) {
+  statsWindow = w
+  document.querySelectorAll('.stats-window-btn').forEach(b => b.classList.toggle('active', b.dataset.w === w))
+  if (detailId) loadStats(detailId)
+}
+
+async function loadStats(id) {
+  if (!id) return
+  document.getElementById('stats-summary').innerHTML = '<span class="stats-label">Loading…</span>'
+  try {
+    const [data, players] = await Promise.all([
+      api('GET', `/api/instances/${id}/metrics?window=${statsWindow}`),
+      api('GET', `/api/instances/${id}/player-stats?window=${statsWindow}`),
+    ])
+    renderStats(data)
+    renderPlayerStats(players)
+  } catch (e) {
+    document.getElementById('stats-summary').innerHTML = `<span class="stats-label">${esc(e.message)}</span>`
+  }
+}
+
+function renderStats(data) {
+  const { metrics, events, summary } = data
+
+  // Summary chips
+  const uptimeCls = summary.uptime_pct >= 90 ? 'good' : summary.uptime_pct >= 60 ? 'warn' : 'bad'
+  const tpsCls    = !summary.avg_tps ? '' : summary.avg_tps >= 18 ? 'good' : summary.avg_tps >= 12 ? 'warn' : 'bad'
+  const crashCls  = summary.crash_count === 0 ? 'good' : summary.crash_count <= 2 ? 'warn' : 'bad'
+
+  document.getElementById('stats-summary').innerHTML = `
+    <div class="stat-chip">
+      <span class="stat-chip-label">Uptime</span>
+      <span class="stat-chip-value ${uptimeCls}">${summary.uptime_pct.toFixed(1)}%</span>
+    </div>
+    <div class="stat-chip">
+      <span class="stat-chip-label">Avg TPS</span>
+      <span class="stat-chip-value ${tpsCls}">${summary.avg_tps != null ? summary.avg_tps.toFixed(1) : '—'}</span>
+    </div>
+    <div class="stat-chip">
+      <span class="stat-chip-label">Avg RAM</span>
+      <span class="stat-chip-value">${summary.avg_ram_mb != null ? Math.round(summary.avg_ram_mb) + ' MB' : '—'}</span>
+    </div>
+    <div class="stat-chip">
+      <span class="stat-chip-label">Peak Players</span>
+      <span class="stat-chip-value">${summary.peak_players}</span>
+    </div>
+    <div class="stat-chip">
+      <span class="stat-chip-label">Crashes</span>
+      <span class="stat-chip-value ${crashCls}">${summary.crash_count}</span>
+    </div>`
+
+  if (metrics.length === 0) {
+    document.querySelector('.stats-charts').innerHTML = '<div class="stats-no-data">No metrics recorded yet — data appears after the server runs for ~1 minute.</div>'
+    document.getElementById('stats-events').innerHTML = ''
+    return
+  }
+
+  const labels = metrics.map(m => fmtChartTime(m.ts))
+
+  renderChart('chart-tps',     labels, metrics.map(m => m.tps),     'TPS',       '#4ade80', 20)
+  renderChart('chart-ram',     labels, metrics.map(m => m.ram_mb),  'RAM (MB)',  '#60a5fa', null)
+  renderChart('chart-players', labels, metrics.map(m => m.players), 'Players',   '#f472b6', null)
+  renderChart('chart-cpu',     labels, metrics.map(m => m.cpu_pct), 'CPU %',     '#a78bfa', 100)
+
+  // Events list
+  const evEl = document.getElementById('stats-events')
+  if (events.length === 0) {
+    evEl.innerHTML = ''
+  } else {
+    evEl.innerHTML = events.map(e =>
+      `<span class="stats-event-tag ${esc(e.event)}">${fmtChartTime(e.ts)} — ${esc(e.event)}</span>`
+    ).join('')
+  }
+}
+
+function renderChart(canvasId, labels, rawData, label, color, suggestedMax) {
+  // Destroy old chart instance if it exists
+  if (_charts[canvasId]) { _charts[canvasId].destroy() }
+
+  const canvas = document.getElementById(canvasId)
+  if (!canvas) return
+
+  // Replace nulls with NaN so Chart.js draws gaps
+  const data = rawData.map(v => (v == null ? NaN : v))
+
+  _charts[canvasId] = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label,
+        data,
+        borderColor: color,
+        backgroundColor: hexToRgba(color, 0.12),
+        borderWidth: 1.5,
+        pointRadius: 0,
+        pointHoverRadius: 3,
+        fill: true,
+        tension: 0.3,
+        spanGaps: false,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          backgroundColor: 'rgba(20,20,28,.9)',
+          titleColor: '#94a3b8',
+          bodyColor: '#e2e8f0',
+          borderColor: '#2d3748',
+          borderWidth: 1,
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: '#64748b', maxTicksLimit: 8, font: { size: 10 } },
+          grid:  { color: 'rgba(255,255,255,.04)' },
+        },
+        y: {
+          min: 0,
+          suggestedMax: suggestedMax || undefined,
+          ticks: { color: '#64748b', font: { size: 10 } },
+          grid:  { color: 'rgba(255,255,255,.04)' },
+        },
+      },
+    }
+  })
+}
+
+function fmtChartTime(ts) {
+  const d = new Date(ts * 1000)
+  const h = d.getHours().toString().padStart(2, '0')
+  const m = d.getMinutes().toString().padStart(2, '0')
+  if (statsWindow === '7d') {
+    return `${(d.getMonth()+1)}/${d.getDate()} ${h}:${m}`
+  }
+  return `${h}:${m}`
+}
+
+function hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  return `rgba(${r},${g},${b},${alpha})`
+}
+
+function renderPlayerStats(data) {
+  const el = document.getElementById('stats-players')
+  if (!el) return
+  if (!data || data.stats.length === 0) { el.innerHTML = ''; return }
+
+  function fmtDur(secs) {
+    if (!secs) return '—'
+    const h = Math.floor(secs / 3600)
+    const m = Math.floor((secs % 3600) / 60)
+    return h > 0 ? `${h}h ${m}m` : `${m}m`
+  }
+  function fmtTs(ts) {
+    return new Date(ts * 1000).toLocaleDateString()
+  }
+
+  const rows = data.stats.map(s => `
+    <tr>
+      <td class="stats-player-name">${esc(s.player)}</td>
+      <td>${s.sessions}</td>
+      <td>${fmtDur(s.total_secs)}</td>
+      <td>${fmtTs(s.last_seen)}</td>
+    </tr>`).join('')
+
+  el.innerHTML = `
+    <div class="stats-players-header">Player Activity</div>
+    <table class="stats-player-table">
+      <thead><tr><th>Player</th><th>Sessions</th><th>Total Time</th><th>Last Seen</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`
+}
+
+// ─── Alerts config ────────────────────────────────────────────────────────────
+
+async function loadBackupConfig(id) {
+  if (!id) return
+  try {
+    const data = await api('GET', `/api/instances/${id}/backup-config`)
+    document.getElementById('backup-enabled').checked    = !!data.enabled
+    document.getElementById('backup-schedule').value     = data.schedule ?? ''
+    document.getElementById('backup-keep').value         = data.keep_count ?? 10
+    document.getElementById('backup-world-only').checked = !!data.world_only
+  } catch { /* silent */ }
+}
+
+async function saveBackupConfig() {
+  if (!detailId) return
+  const body = {
+    enabled:    document.getElementById('backup-enabled').checked,
+    schedule:   document.getElementById('backup-schedule').value.trim() || null,
+    keep_count: parseInt(document.getElementById('backup-keep').value) || 10,
+    world_only: document.getElementById('backup-world-only').checked,
+  }
+  const msg = document.getElementById('backup-cfg-msg')
+  try {
+    await api('POST', `/api/instances/${detailId}/backup-config`, body)
+    msg.textContent = 'Saved'
+    msg.style.color = 'var(--green)'
+    msg.classList.remove('hidden')
+    setTimeout(() => msg.classList.add('hidden'), 2000)
+  } catch {
+    msg.textContent = 'Failed to save'
+    msg.style.color = 'var(--red)'
+    msg.classList.remove('hidden')
+  }
+}
+
+async function loadAlertsConfig(id) {
+  if (!id) return
+  try {
+    const data = await api('GET', `/api/instances/${id}/alerts-config`)
+    document.getElementById('alert-enabled').checked = !!data.enabled
+    document.getElementById('alert-tps-min').value = data.tps_min ?? 15
+    document.getElementById('alert-tps-consecutive').value = data.tps_consecutive ?? 3
+    document.getElementById('alert-ram-pct').value = data.ram_pct_max ?? 90
+    document.getElementById('alert-max-ram').value = data.max_ram_mb ?? 0
+  } catch { /* silent */ }
+}
+
+async function saveAlertsConfig() {
+  if (!detailId) return
+  const body = {
+    enabled:          document.getElementById('alert-enabled').checked,
+    tps_min:          parseFloat(document.getElementById('alert-tps-min').value),
+    tps_consecutive:  parseInt(document.getElementById('alert-tps-consecutive').value, 10),
+    ram_pct_max:      parseInt(document.getElementById('alert-ram-pct').value, 10),
+    max_ram_mb:       parseInt(document.getElementById('alert-max-ram').value, 10) || 0,
+  }
+  try {
+    await api('POST', `/api/instances/${detailId}/alerts-config`, body)
+    showSettingsMsg('alerts-cfg-msg', 'Alert settings saved.', 'success')
+  } catch (e) {
+    showSettingsMsg('alerts-cfg-msg', e.message, 'error')
+  }
+}
+
+// ─── Scheduled commands ───────────────────────────────────────────────────────
+
+async function loadSchedules(id) {
+  if (!id) return
+  try {
+    const data = await api('GET', `/api/instances/${id}/schedules`)
+    renderSchedules(data)
+  } catch { /* silent */ }
+}
+
+function renderSchedules(list) {
+  const el = document.getElementById('schedules-list')
+  if (!el) return
+  if (!list || list.length === 0) { el.innerHTML = ''; return }
+  el.innerHTML = list.map(s => `
+    <div class="schedule-item">
+      <span class="schedule-item-name">${esc(s.name)}</span>
+      <span class="schedule-item-cmd">${esc(s.command)}</span>
+      <span class="schedule-item-interval">every ${fmtInterval(s.interval_secs)}</span>
+      <label class="schedule-item-toggle" title="Enable/disable">
+        <input type="checkbox" ${s.enabled ? 'checked' : ''}
+          onchange="toggleSchedule(${JSON.stringify(s.name)}, this.checked, ${s.interval_secs}, ${JSON.stringify(s.command)})">
+      </label>
+      <button class="schedule-item-del" onclick="deleteSchedule(${JSON.stringify(s.name)})" title="Delete">✕</button>
+    </div>`).join('')
+}
+
+function fmtInterval(secs) {
+  if (secs < 60) return `${secs}s`
+  if (secs < 3600) return `${Math.round(secs / 60)}m`
+  return `${Math.round(secs / 3600)}h`
+}
+
+async function addSchedule() {
+  if (!detailId) return
+  const name     = document.getElementById('sched-name').value.trim()
+  const cmd      = document.getElementById('sched-cmd').value.trim()
+  const interval = parseInt(document.getElementById('sched-interval').value, 10)
+  if (!name || !cmd || !interval || interval < 10) {
+    showSettingsMsg('schedules-msg', 'Name, command and interval (≥10s) are required.', 'error')
+    return
+  }
+  try {
+    await api('POST', `/api/instances/${detailId}/schedules`, { name, command: cmd, interval_secs: interval, enabled: true })
+    document.getElementById('sched-name').value = ''
+    document.getElementById('sched-cmd').value = ''
+    document.getElementById('sched-interval').value = ''
+    await loadSchedules(detailId)
+    showSettingsMsg('schedules-msg', 'Schedule added.', 'success')
+  } catch (e) {
+    showSettingsMsg('schedules-msg', e.message, 'error')
+  }
+}
+
+async function toggleSchedule(name, enabled, interval_secs, command) {
+  if (!detailId) return
+  try {
+    await api('POST', `/api/instances/${detailId}/schedules`, { name, command, interval_secs, enabled })
+  } catch (e) {
+    showSettingsMsg('schedules-msg', e.message, 'error')
+    loadSchedules(detailId)
+  }
+}
+
+async function deleteSchedule(name) {
+  if (!detailId) return
+  try {
+    await api('DELETE', `/api/instances/${detailId}/schedules/${encodeURIComponent(name)}`)
+    await loadSchedules(detailId)
+    showSettingsMsg('schedules-msg', 'Schedule deleted.', 'success')
+  } catch (e) {
+    showSettingsMsg('schedules-msg', e.message, 'error')
+  }
+}
+
 // ─── Action helpers ───────────────────────────────────────────────────────────
 async function doStart(id) {
   try {
@@ -1982,4 +2743,55 @@ function fmtSize(bytes) {
 
 function fmtDate(ts) {
   return new Date(ts * 1000).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+// ─── Discord notification toggles ────────────────────────────────────────────
+
+async function openDiscordNotifyModal() {
+  const res = await fetch('/api/discord-notify')
+  if (!res.ok) {
+    showToast('Discord is not configured in config.toml', 'error')
+    return
+  }
+  const cfg = await res.json()
+  document.getElementById('dn-started').checked      = cfg.server_started
+  document.getElementById('dn-stopped').checked      = cfg.server_stopped
+  document.getElementById('dn-crashed').checked      = cfg.server_crashed
+  document.getElementById('dn-backup-done').checked  = cfg.backup_done
+  document.getElementById('dn-backup-failed').checked = cfg.backup_failed
+  document.getElementById('dn-health-alerts').checked = cfg.health_alerts
+  document.getElementById('discord-notify-msg').classList.add('hidden')
+  document.getElementById('discord-notify-modal').classList.remove('hidden')
+}
+
+function closeDiscordNotifyModal() {
+  document.getElementById('discord-notify-modal').classList.add('hidden')
+}
+
+function discordNotifyBackdropClose(e) {
+  if (e.target === document.getElementById('discord-notify-modal')) closeDiscordNotifyModal()
+}
+
+async function saveDiscordNotify() {
+  const body = {
+    server_started:  document.getElementById('dn-started').checked,
+    server_stopped:  document.getElementById('dn-stopped').checked,
+    server_crashed:  document.getElementById('dn-crashed').checked,
+    backup_done:     document.getElementById('dn-backup-done').checked,
+    backup_failed:   document.getElementById('dn-backup-failed').checked,
+    health_alerts:   document.getElementById('dn-health-alerts').checked,
+  }
+  const res = await fetch('/api/discord-notify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (res.ok) {
+    closeDiscordNotifyModal()
+    showToast('Discord notification settings saved')
+  } else {
+    const msg = document.getElementById('discord-notify-msg')
+    msg.textContent = 'Failed to save'
+    msg.classList.remove('hidden')
+  }
 }
