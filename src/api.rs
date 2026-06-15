@@ -13,7 +13,7 @@ use crate::{
     ban::{BannedIp, BannedPlayer},
     config::{data_dir, BackupConfig, InstanceConfig, InstanceMeta, RestartConfig, ServerConfig},
     ftb, instance, mod_mgr, modpack, setup, whitelist,
-    mod_mgr::{ModEntry, ModUpdate},
+    mod_mgr::{ModEntry, ModSearchHit, ModUpdate},
     whitelist::WhitelistEntry,
     state::{AppState, InstanceInfo, InstanceState, InstanceStatus, LogLine},
 };
@@ -397,6 +397,71 @@ pub async fn update_all_mods(
     mod_mgr::write_lock(&instance_dir, &lock)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ── Mod search + add ──────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct SearchModsQuery {
+    pub term: String,
+}
+
+pub async fn search_mods_for_instance(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(params): Query<SearchModsQuery>,
+) -> ApiResult<Json<Vec<ModSearchHit>>> {
+    let (mc_version, loader) = {
+        let instances = state.instances.read().await;
+        let inst = instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+        (
+            inst.config.instance.minecraft_version.clone(),
+            inst.config.instance.loader.clone().unwrap_or_else(|| "neoforge".to_string()),
+        )
+    };
+    let hits = mod_mgr::search_mods(&state.http_client, &params.term, &mc_version, &loader)
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, e))?;
+    Ok(Json(hits))
+}
+
+#[derive(Deserialize)]
+pub struct AddModRequest {
+    pub project_id: String,
+    pub version_id: String,
+}
+
+pub async fn add_mod_to_instance(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<AddModRequest>,
+) -> ApiResult<Json<Vec<ModEntry>>> {
+    let (server_path, instance_dir, mc_version, loader) = {
+        let instances = state.instances.read().await;
+        let inst = instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+        (
+            inst.config.server.path.clone(),
+            inst.instance_dir.clone(),
+            inst.config.instance.minecraft_version.clone(),
+            inst.config.instance.loader.clone().unwrap_or_else(|| "neoforge".to_string()),
+        )
+    };
+    let entries = mod_mgr::add_mod(
+        &state.http_client,
+        &req.project_id,
+        &req.version_id,
+        &mc_version,
+        &loader,
+        &server_path,
+        &instance_dir,
+    )
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(entries))
 }
 
 // ── Version update ────────────────────────────────────────────────────────────

@@ -713,6 +713,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .ftb-result-item:hover { background: var(--card-hover); }
 .ftb-result-item.selected { background: var(--card-hover); border-left: 2px solid var(--green); }
 .ftb-result-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.mod-dl-count { font-size: 11px; font-weight: 400; color: var(--text-dim); margin-left: 6px; }
 .ftb-result-desc {
   font-size: 11px;
   color: var(--text-dim);

@@ -92,6 +92,7 @@
       <button class="btn-outline" id="btn-scan-mods" onclick="doScanMods()">⟳ Scan Mods</button>
       <button class="btn-outline" id="btn-check-updates" onclick="doCheckUpdates()" disabled>↑ Check Updates</button>
       <button class="btn-primary" id="btn-update-all" onclick="doUpdateAll()" disabled>Update All</button>
+      <button class="btn-outline" id="btn-add-mod" onclick="openAddModModal()">+ Add Mod</button>
       <span id="mods-status-msg" class="mods-msg hidden"></span>
     </div>
     <div id="mod-list"></div>
@@ -511,6 +512,47 @@
         <span id="ftb-progress-msg" class="setup-progress-msg"></span>
         <button id="btn-ftb-close" class="btn-outline hidden" onclick="closeFtbModal()">Close</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════ ADD MOD MODAL ═══════════════════════ -->
+<div id="add-mod-modal-backdrop" class="modal-backdrop hidden" onclick="addModBackdropClose(event)">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h3>Add Mod from Modrinth</h3>
+      <button class="btn-close" onclick="closeAddModModal()">✕</button>
+    </div>
+
+    <div class="setup-form-body">
+      <div class="field">
+        <label>Search Mods</label>
+        <div class="import-search-row">
+          <input id="add-mod-search-input" type="text" placeholder="e.g. Create, Applied Energistics, JEI…"
+                 onkeydown="if(event.key==='Enter'){searchModrinthMods()}">
+          <button id="btn-add-mod-search" class="btn-outline" type="button" onclick="searchModrinthMods()">Search</button>
+        </div>
+      </div>
+
+      <div id="add-mod-results" class="ftb-results hidden"></div>
+
+      <div id="add-mod-selected" class="hidden">
+        <div class="import-project-preview">
+          <div class="import-project-name" id="add-mod-title"></div>
+          <div class="import-project-desc" id="add-mod-desc"></div>
+        </div>
+        <div class="field">
+          <label>Version</label>
+          <select id="add-mod-version" class="prop-select"></select>
+        </div>
+      </div>
+
+      <div id="add-mod-error" class="error-msg hidden"></div>
+    </div>
+
+    <div class="modal-footer">
+      <button type="button" class="btn-outline" onclick="closeAddModModal()">Cancel</button>
+      <button id="btn-add-mod-submit" class="btn-primary" onclick="submitAddMod()" disabled>Add Mod</button>
     </div>
   </div>
 </div>

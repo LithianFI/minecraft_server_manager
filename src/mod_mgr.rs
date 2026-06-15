@@ -57,6 +57,15 @@ struct MrVersion {
     project_id: String,
     version_number: String,
     files: Vec<MrFile>,
+    #[serde(default)]
+    dependencies: Vec<MrDependency>,
+}
+
+#[derive(Deserialize)]
+struct MrDependency {
+    version_id: Option<String>,
+    project_id: Option<String>,
+    dependency_type: String,
 }
 
 #[derive(Deserialize)]
@@ -257,6 +266,225 @@ pub async fn check_updates(
 
     updates.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(updates)
+}
+
+// ── Search mods ───────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModSearchHit {
+    pub project_id: String,
+    pub slug: String,
+    pub title: String,
+    pub description: String,
+    pub downloads: u64,
+    pub icon_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MrSearchResponse {
+    hits: Vec<MrSearchHit>,
+}
+
+#[derive(Deserialize)]
+struct MrSearchHit {
+    project_id: String,
+    slug: String,
+    title: String,
+    description: String,
+    downloads: u64,
+    icon_url: Option<String>,
+}
+
+pub async fn search_mods(
+    client: &reqwest::Client,
+    term: &str,
+    mc_version: &str,
+    loader: &str,
+) -> Result<Vec<ModSearchHit>, String> {
+    let facets = serde_json::json!([
+        ["project_type:mod"],
+        [format!("categories:{}", loader)],
+        [format!("versions:{}", mc_version)]
+    ]);
+
+    let resp: MrSearchResponse = client
+        .get(format!("{}/search", MODRINTH))
+        .header("User-Agent", UA)
+        .query(&[
+            ("query", term),
+            ("facets", &facets.to_string()),
+            ("limit", "20"),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("Modrinth search failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Modrinth search parse error: {}", e))?;
+
+    Ok(resp.hits.into_iter().map(|h| ModSearchHit {
+        project_id: h.project_id,
+        slug: h.slug,
+        title: h.title,
+        description: h.description,
+        downloads: h.downloads,
+        icon_url: h.icon_url,
+    }).collect())
+}
+
+// ── Add a mod by version ID (resolves required dependencies) ─────────────────
+
+pub async fn add_mod(
+    client: &reqwest::Client,
+    project_id: &str,
+    version_id: &str,
+    mc_version: &str,
+    loader: &str,
+    server_path: &Path,
+    instance_dir: &Path,
+) -> Result<Vec<ModEntry>, String> {
+    let mods_dir = server_path.join("mods");
+    if !mods_dir.exists() {
+        std::fs::create_dir_all(&mods_dir)
+            .map_err(|e| format!("Cannot create mods directory: {}", e))?;
+    }
+
+    let mut lock = read_lock(instance_dir);
+
+    // BFS queue: (version_id, known_project_id)
+    // known_project_id lets us skip the API call if already installed/visited.
+    let mut queue: Vec<(String, Option<String>)> =
+        vec![(version_id.to_string(), Some(project_id.to_string()))];
+    let mut visited: HashSet<String> = HashSet::new(); // project IDs processed this run
+    let mut installed: Vec<ModEntry> = Vec::new();
+
+    while let Some((vid, known_pid)) = queue.pop() {
+        // Early skip if we already know the project ID
+        if let Some(ref pid) = known_pid {
+            if visited.contains(pid) || lock.mods.iter().any(|m| &m.modrinth_project_id == pid) {
+                continue;
+            }
+        }
+
+        // Fetch version info
+        let version: MrVersion = client
+            .get(format!("{}/version/{}", MODRINTH, vid))
+            .header("User-Agent", UA)
+            .send()
+            .await
+            .map_err(|e| format!("Modrinth request failed: {}", e))?
+            .json()
+            .await
+            .map_err(|e| format!("Modrinth parse error: {}", e))?;
+
+        let pid = version.project_id.clone();
+
+        // Skip if already installed or visited (covers cases where known_pid was None)
+        if visited.contains(&pid) || lock.mods.iter().any(|m| m.modrinth_project_id == pid) {
+            continue;
+        }
+        visited.insert(pid.clone());
+
+        // Get primary file
+        let file = version.files.iter().find(|f| f.primary)
+            .or_else(|| version.files.first())
+            .ok_or_else(|| format!("No files found for version {}", vid))?;
+
+        // Download
+        let bytes = client
+            .get(&file.url)
+            .header("User-Agent", UA)
+            .send()
+            .await
+            .map_err(|e| format!("Download failed: {}", e))?
+            .bytes()
+            .await
+            .map_err(|e| format!("Download read failed: {}", e))?;
+
+        // Verify SHA512
+        let expected = file.hashes.sha512.clone();
+        let actual = tokio::task::spawn_blocking({
+            let b = bytes.clone();
+            move || {
+                let mut h = Sha512::new();
+                h.update(&b);
+                hex::encode(h.finalize())
+            }
+        })
+        .await
+        .map_err(|e| format!("Hash task panicked: {}", e))?;
+
+        if actual != expected {
+            return Err(format!(
+                "SHA512 mismatch for {}: file may be corrupted",
+                file.filename
+            ));
+        }
+
+        // Write file
+        tokio::fs::write(mods_dir.join(&file.filename), &bytes[..])
+            .await
+            .map_err(|e| format!("Failed to write {}: {}", file.filename, e))?;
+
+        // Fetch project title
+        let project: MrProject = client
+            .get(format!("{}/project/{}", MODRINTH, pid))
+            .header("User-Agent", UA)
+            .send()
+            .await
+            .map_err(|e| format!("Modrinth request failed: {}", e))?
+            .json()
+            .await
+            .map_err(|e| format!("Modrinth parse error: {}", e))?;
+
+        let entry = ModEntry {
+            name: project.title,
+            modrinth_project_id: pid.clone(),
+            modrinth_version_id: version.id,
+            version_number: version.version_number,
+            filename: file.filename.clone(),
+            sha512: actual,
+        };
+
+        lock.mods.retain(|m| m.modrinth_project_id != pid);
+        lock.mods.push(entry.clone());
+        installed.push(entry);
+
+        // Enqueue required dependencies
+        for dep in version.dependencies.iter().filter(|d| d.dependency_type == "required") {
+            if let Some(dep_vid) = &dep.version_id {
+                queue.push((dep_vid.clone(), dep.project_id.clone()));
+            } else if let Some(dep_pid) = &dep.project_id {
+                // Skip early if already known
+                if visited.contains(dep_pid) || lock.mods.iter().any(|m| &m.modrinth_project_id == dep_pid) {
+                    continue;
+                }
+                // Find the latest compatible version for this MC version + loader
+                let versions: Vec<MrVersion> = client
+                    .get(format!("{}/project/{}/version", MODRINTH, dep_pid))
+                    .header("User-Agent", UA)
+                    .query(&[
+                        ("loaders", serde_json::json!([loader]).to_string()),
+                        ("game_versions", serde_json::json!([mc_version]).to_string()),
+                    ])
+                    .send()
+                    .await
+                    .map_err(|e| format!("Dependency lookup failed for {}: {}", dep_pid, e))?
+                    .json()
+                    .await
+                    .map_err(|e| format!("Dependency parse error for {}: {}", dep_pid, e))?;
+                if let Some(v) = versions.into_iter().next() {
+                    queue.push((v.id, Some(dep_pid.clone())));
+                }
+                // No compatible version available — skip silently
+            }
+        }
+    }
+
+    lock.mods.sort_by(|a, b| a.name.cmp(&b.name));
+    write_lock(instance_dir, &lock)?;
+
+    Ok(installed)
 }
 
 // ── Apply a single mod update ─────────────────────────────────────────────────

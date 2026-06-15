@@ -93,6 +93,8 @@ async fn main() {
         .route("/api/instances/{id}/backups/{filename}", axum::routing::delete(api::delete_backup))
         .route("/api/instances/{id}/mods", get(api::list_mods).post(api::scan_mods))
         .route("/api/instances/{id}/mods/updates", get(api::get_mod_updates))
+        .route("/api/instances/{id}/mods/search", get(api::search_mods_for_instance))
+        .route("/api/instances/{id}/mods/add", post(api::add_mod_to_instance))
         .route("/api/instances/{id}/mods/update-all", post(api::update_all_mods))
         .route("/api/instances/{id}/mods/{project_id}/update", post(api::update_single_mod))
         .route("/api/instances/{id}/update-version", post(api::update_server_version))

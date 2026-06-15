@@ -70,9 +70,18 @@ pub async fn run_tps_task(state: Arc<AppState>, instance_id: String) {
         }
 
         {
-            let processes = state.processes.lock().await;
-            if let Some(handle) = processes.get(&instance_id) {
-                let _ = handle.stdin_tx.send("forge tps".to_string());
+            let loader = {
+                let instances = state.instances.read().await;
+                instances.get(&instance_id)
+                    .and_then(|i| i.config.instance.loader.clone())
+                    .unwrap_or_default()
+            };
+            // forge tps is only available on Forge/NeoForge
+            if loader == "neoforge" || loader == "forge" {
+                let processes = state.processes.lock().await;
+                if let Some(handle) = processes.get(&instance_id) {
+                    let _ = handle.stdin_tx.send("forge tps".to_string());
+                }
             }
         }
 

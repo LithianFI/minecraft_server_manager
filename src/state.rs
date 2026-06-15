@@ -41,6 +41,7 @@ pub struct InstanceInfo {
     pub name: String,
     pub display_name: String,
     pub minecraft_version: String,
+    pub loader: Option<String>,
     pub status: InstanceStatus,
     pub players: Vec<String>,
     pub started_at: Option<i64>,
@@ -62,6 +63,7 @@ impl From<&InstanceState> for InstanceInfo {
                 .clone()
                 .unwrap_or_else(|| s.config.instance.name.clone()),
             minecraft_version: s.config.instance.minecraft_version.clone(),
+            loader: s.config.instance.loader.clone(),
             status: s.status.clone(),
             players: s.players.iter().cloned().collect(),
             started_at: s.started_at.map(|t| t.timestamp()),

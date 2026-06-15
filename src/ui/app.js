@@ -1236,6 +1236,162 @@ function onFtbFailed(error) {
   document.getElementById('btn-ftb-close').classList.remove('hidden')
 }
 
+// ─── Add Mod modal ────────────────────────────────────────────────────────────
+
+let _addModResults = []
+let _addModSelectedHit = null
+
+function openAddModModal() {
+  _addModResults = []
+  _addModSelectedHit = null
+  document.getElementById('add-mod-search-input').value = ''
+  document.getElementById('add-mod-results').innerHTML = ''
+  document.getElementById('add-mod-results').classList.add('hidden')
+  document.getElementById('add-mod-selected').classList.add('hidden')
+  document.getElementById('add-mod-error').classList.add('hidden')
+  document.getElementById('btn-add-mod-submit').disabled = true
+  document.getElementById('add-mod-modal-backdrop').classList.remove('hidden')
+  setTimeout(() => document.getElementById('add-mod-search-input').focus(), 50)
+}
+
+function closeAddModModal() {
+  document.getElementById('add-mod-modal-backdrop').classList.add('hidden')
+}
+
+function addModBackdropClose(e) {
+  if (e.target === document.getElementById('add-mod-modal-backdrop')) closeAddModModal()
+}
+
+async function searchModrinthMods() {
+  if (!detailId) return
+  const term = document.getElementById('add-mod-search-input').value.trim()
+  if (!term) return
+
+  const btn = document.getElementById('btn-add-mod-search')
+  const errEl = document.getElementById('add-mod-error')
+  const resultsEl = document.getElementById('add-mod-results')
+  btn.disabled = true
+  btn.textContent = '…'
+  errEl.classList.add('hidden')
+  document.getElementById('add-mod-selected').classList.add('hidden')
+  document.getElementById('btn-add-mod-submit').disabled = true
+  resultsEl.innerHTML = '<div class="ftb-result-item" style="color:var(--text-dim)">Searching…</div>'
+  resultsEl.classList.remove('hidden')
+
+  try {
+    const data = await api('GET', `/api/instances/${detailId}/mods/search?term=${encodeURIComponent(term)}`)
+    _addModResults = data ?? []
+
+    if (_addModResults.length === 0) {
+      resultsEl.innerHTML = '<div class="ftb-result-item" style="color:var(--text-dim)">No results found.</div>'
+      return
+    }
+
+    resultsEl.innerHTML = _addModResults.map((hit, i) => {
+      const dl = hit.downloads >= 1_000_000
+        ? `${(hit.downloads / 1_000_000).toFixed(1)}M`
+        : hit.downloads >= 1000
+          ? `${Math.round(hit.downloads / 1000)}k`
+          : String(hit.downloads)
+      return `
+        <div class="ftb-result-item" onclick="selectAddModHit(${i})">
+          <div class="ftb-result-name">${esc(hit.title)} <span class="mod-dl-count">${dl} downloads</span></div>
+          <div class="ftb-result-desc">${esc(hit.description)}</div>
+        </div>`
+    }).join('')
+  } catch (err) {
+    errEl.textContent = err.message
+    errEl.classList.remove('hidden')
+    resultsEl.classList.add('hidden')
+  } finally {
+    btn.disabled = false
+    btn.textContent = 'Search'
+  }
+}
+
+async function selectAddModHit(index) {
+  _addModSelectedHit = _addModResults[index]
+
+  document.querySelectorAll('#add-mod-results .ftb-result-item').forEach((el, i) => {
+    el.classList.toggle('selected', i === index)
+  })
+
+  const errEl = document.getElementById('add-mod-error')
+  errEl.classList.add('hidden')
+  document.getElementById('add-mod-title').textContent = _addModSelectedHit.title
+  document.getElementById('add-mod-desc').textContent = _addModSelectedHit.description
+  document.getElementById('add-mod-selected').classList.remove('hidden')
+  document.getElementById('btn-add-mod-submit').disabled = true
+
+  const select = document.getElementById('add-mod-version')
+  select.innerHTML = '<option>Loading versions…</option>'
+
+  try {
+    const inst = instances.get(detailId)
+    const loader = inst?.loader ?? 'neoforge'
+    const mcVer = inst?.minecraft_version ?? ''
+    const loadersParam = encodeURIComponent(JSON.stringify([loader]))
+    const versionsParam = encodeURIComponent(JSON.stringify([mcVer]))
+
+    const versions = await fetch(
+      `https://api.modrinth.com/v2/project/${encodeURIComponent(_addModSelectedHit.project_id)}/version?loaders=${loadersParam}&game_versions=${versionsParam}`,
+      { headers: { 'User-Agent': 'msm/0.1' } }
+    ).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      return r.json()
+    })
+
+    if (!versions.length) {
+      select.innerHTML = '<option value="">No compatible versions</option>'
+      errEl.textContent = `No versions compatible with MC ${mcVer} + ${loader}`
+      errEl.classList.remove('hidden')
+      return
+    }
+
+    select.innerHTML = versions.map(v =>
+      `<option value="${esc(v.id)}">${esc(v.name || v.version_number)} — ${esc(v.version_number)}</option>`
+    ).join('')
+    document.getElementById('btn-add-mod-submit').disabled = false
+  } catch (err) {
+    select.innerHTML = ''
+    errEl.textContent = 'Failed to load versions: ' + err.message
+    errEl.classList.remove('hidden')
+  }
+}
+
+async function submitAddMod() {
+  if (!detailId || !_addModSelectedHit) return
+  const versionId = document.getElementById('add-mod-version').value
+  if (!versionId) return
+
+  const btn = document.getElementById('btn-add-mod-submit')
+  const errEl = document.getElementById('add-mod-error')
+  btn.disabled = true
+  btn.textContent = 'Adding…'
+  errEl.classList.add('hidden')
+
+  try {
+    const added = await api('POST', `/api/instances/${detailId}/mods/add`, {
+      project_id: _addModSelectedHit.project_id,
+      version_id: versionId,
+    })
+    const mods = await api('GET', `/api/instances/${detailId}/mods`)
+    modsData.set(detailId, { mods: mods ?? [], updates: null })
+    renderMods()
+    closeAddModModal()
+    const depCount = (added?.length ?? 1) - 1
+    const msg = depCount > 0
+      ? `Added ${_addModSelectedHit.title} + ${depCount} dependenc${depCount === 1 ? 'y' : 'ies'}.`
+      : `Added ${_addModSelectedHit.title}.`
+    setModsMsg(msg, 'success')
+  } catch (err) {
+    errEl.textContent = 'Failed to add mod: ' + err.message
+    errEl.classList.remove('hidden')
+    btn.disabled = false
+    btn.textContent = 'Add Mod'
+  }
+}
+
 // ─── Whitelist + Bans drawer ──────────────────────────────────────────────────
 let wlEntries  = []
 let banPlayers = []
