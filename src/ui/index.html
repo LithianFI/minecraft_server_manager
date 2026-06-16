@@ -14,31 +14,41 @@
 <!-- ═══════════════════════════════ DASHBOARD VIEW ═══ -->
 <div id="view-dashboard">
   <header class="topbar">
-    <div class="wordmark">
-      <span class="logo">⬡</span>
-      <span class="app-name">MSM</span>
-      <span class="app-sub">Minecraft Server Manager</span>
-    </div>
-    <div class="topbar-right">
-      <div id="running-badge" class="running-badge hidden">
-        <span class="pulse-dot"></span>
-        <span id="running-name"></span>
+    <div class="topbar-inner">
+      <div class="wordmark">
+        <span class="logo">⬡</span>
+        <span class="app-name">MSM</span>
+        <span class="app-sub">Minecraft Server Manager</span>
       </div>
-      <button class="btn-outline" onclick="openSetupModal()">+ Create Server</button>
-      <button class="btn-outline" onclick="openImportModal()">⬇ Modrinth</button>
-      <button class="btn-outline" onclick="openFtbModal()">⬇ FTB</button>
-      <button class="btn-outline" onclick="openAddModal()">+ Add Existing</button>
-      <button class="btn-outline" onclick="openWhitelist()">Whitelist</button>
-      <button class="btn-outline" onclick="openDiscordNotifyModal()">Notifications</button>
+      <div class="topbar-right">
+        <div id="running-badge" class="running-badge hidden">
+          <span class="pulse-dot"></span>
+          <span id="running-name"></span>
+        </div>
+        <button class="btn-outline" onclick="openSetupModal()">+ Create Server</button>
+        <button class="btn-outline" onclick="openImportModal()">⬇ Modrinth</button>
+        <button class="btn-outline" onclick="openFtbModal()">⬇ FTB</button>
+        <button class="btn-outline" onclick="openAddModal()">+ Add Existing</button>
+        <button class="btn-outline" onclick="openWhitelist()">Whitelist</button>
+        <button class="btn-outline" onclick="openDiscordNotifyModal()">Notifications</button>
+      </div>
     </div>
   </header>
+  <div id="dashboard-player-panel" class="hidden">
+    <div class="dpp-inner">
+      <span class="dpp-label">ONLINE — <span id="dpp-server-name" class="dpp-server"></span></span>
+      <div id="dpp-player-tags" class="dpp-player-tags"></div>
+    </div>
+  </div>
   <main id="dashboard-main">
-    <div id="instances-grid" class="grid"></div>
-    <div id="empty-state" class="empty hidden">
-      <div class="empty-icon">⬡</div>
-      <p>No instances found</p>
-      <p class="empty-sub">Add an instance or drop a folder into <code>~/.local/share/msm/instances/</code></p>
-      <button class="btn-primary" onclick="openAddModal()">Add Instance</button>
+    <div class="dashboard-content-wrap">
+      <div id="instances-grid" class="grid"></div>
+      <div id="empty-state" class="empty hidden">
+        <div class="empty-icon">⬡</div>
+        <p>No instances found</p>
+        <p class="empty-sub">Add an instance or drop a folder into <code>~/.local/share/msm/instances/</code></p>
+        <button class="btn-primary" onclick="openAddModal()">Add Instance</button>
+      </div>
     </div>
   </main>
 </div>
@@ -46,17 +56,19 @@
 <!-- ════════════════════════════════ DETAIL VIEW ═════ -->
 <div id="view-detail" class="hidden">
   <header class="topbar">
-    <button class="btn-back" onclick="showDashboard()">← All Instances</button>
-    <div class="detail-heading">
-      <span id="detail-name" class="detail-name"></span>
-      <span id="detail-badge" class="badge"></span>
-      <span id="detail-version" class="detail-version"></span>
-    </div>
-    <div class="topbar-right">
-      <span id="detail-error" class="inline-error hidden"></span>
-      <button class="btn-outline btn-sm" onclick="openUpdateModal()">Update Version</button>
-      <button id="btn-detail-start" class="btn-start hidden" onclick="detailStart()">Start</button>
-      <button id="btn-detail-stop"  class="btn-stop  hidden" onclick="detailStop()">Stop</button>
+    <div class="topbar-inner">
+      <button class="btn-back" onclick="showDashboard()">← All Instances</button>
+      <div class="detail-heading">
+        <span id="detail-name" class="detail-name"></span>
+        <span id="detail-badge" class="badge"></span>
+        <span id="detail-version" class="detail-version"></span>
+      </div>
+      <div class="topbar-right">
+        <span id="detail-error" class="inline-error hidden"></span>
+        <button class="btn-outline btn-sm" onclick="openUpdateModal()">Update Version</button>
+        <button id="btn-detail-start" class="btn-start hidden" onclick="detailStart()">Start</button>
+        <button id="btn-detail-stop"  class="btn-stop  hidden" onclick="detailStop()">Stop</button>
+      </div>
     </div>
   </header>
 

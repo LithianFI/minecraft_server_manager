@@ -239,10 +239,12 @@ function renderDashboard() {
   if (arr.length === 0) {
     grid.innerHTML = ''
     empty.classList.remove('hidden')
+    renderDashboardPlayerPanel()
     return
   }
   empty.classList.add('hidden')
   grid.innerHTML = arr.map(i => cardHTML(i, running)).join('')
+  renderDashboardPlayerPanel()
 }
 
 // Targeted card update — avoids re-rendering the full grid on every event
@@ -268,6 +270,8 @@ function updateCard(inst) {
   } else {
     runningBadge.classList.add('hidden')
   }
+
+  renderDashboardPlayerPanel()
 }
 
 function cardHTML(inst, running) {
@@ -289,22 +293,20 @@ function cardMidHTML(inst) {
   const running = inst.status === 'running' || inst.status === 'starting'
   if (!running) return `<div class="card-port">:${inst.port}</div>`
 
-  let playerLine
-  if (inst.players.length === 0) {
-    playerLine = `<div class="card-players dim"><span class="icon">◈</span> No players online</div>`
-  } else {
-    const names = inst.players.slice(0, 3).map(esc).join(', ') + (inst.players.length > 3 ? '…' : '')
-    playerLine = `<div class="card-players"><span class="icon">◈</span> ${inst.players.length} online <span class="card-player-names">${names}</span></div>`
-  }
+  const count = inst.players.length
+  const playerStr = count === 0
+    ? `<span class="card-player-count dim">No players</span>`
+    : `<span class="card-player-count">${count} player${count !== 1 ? 's' : ''}</span>`
 
-  let metricsLine = ''
+  let metricsStr = ''
   if (inst.ram_mb != null) {
     const ram = inst.ram_mb >= 1024 ? `${(inst.ram_mb / 1024).toFixed(1)} GB` : `${inst.ram_mb} MB`
     const tps = inst.tps != null ? ` · <span class="card-tps ${tpsClass(inst.tps)}">${inst.tps.toFixed(1)} TPS</span>` : ''
-    metricsLine = `<div class="card-metrics">${ram} RAM${tps}</div>`
+    metricsStr = `<span class="card-metrics">${ram} RAM${tps}</span>`
   }
 
-  return playerLine + metricsLine
+  const sep = metricsStr ? `<span class="card-mid-sep">·</span>` : ''
+  return `<div class="card-stats-row">${playerStr}${sep}${metricsStr}</div>`
 }
 
 function tpsClass(tps) {
@@ -362,6 +364,29 @@ async function playerAction(instanceId, player, action) {
   } catch (e) {
     showToast('Player action failed', e.message, 'error', 4000)
   }
+}
+
+function renderDashboardPlayerPanel() {
+  const panel = document.getElementById('dashboard-player-panel')
+  if (!panel) return
+  const running = [...instances.values()].find(i => i.status === 'running' || i.status === 'starting')
+  if (!running || running.players.length === 0) {
+    panel.classList.add('hidden')
+    return
+  }
+  panel.classList.remove('hidden')
+  document.getElementById('dpp-server-name').textContent = running.display_name
+  const isRunning = running.status === 'running'
+  document.getElementById('dpp-player-tags').innerHTML = running.players.map(p => `
+    <span class="player-tag-wrap">
+      <span class="player-tag">${esc(p)}</span>
+      ${isRunning ? `
+        <span class="player-actions">
+          <button class="player-action-btn" onclick="playerAction(${JSON.stringify(running.id)},${JSON.stringify(p)},'kick')" title="Kick">✕</button>
+          <button class="player-action-btn" onclick="playerAction(${JSON.stringify(running.id)},${JSON.stringify(p)},'op')" title="Op">★</button>
+          <button class="player-action-btn" onclick="playerAction(${JSON.stringify(running.id)},${JSON.stringify(p)},'deop')" title="Deop">☆</button>
+        </span>` : ''}
+    </span>`).join('')
 }
 
 function refreshPlayerBar(inst) {
