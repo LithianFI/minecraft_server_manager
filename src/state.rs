@@ -23,6 +23,15 @@ pub struct LogLine {
     pub timestamp: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct DeathInfo {
+    pub timestamp: i64,
+    pub x: Option<i32>,
+    pub y: Option<i32>,
+    pub z: Option<i32>,
+    pub dimension: Option<String>,
+}
+
 pub struct InstanceState {
     pub id: String,
     pub instance_dir: PathBuf,
@@ -37,6 +46,7 @@ pub struct InstanceState {
     pub restart_attempts: u32,
     pub low_tps_streak: u32,
     pub high_ram_alerted: bool,
+    pub last_deaths: HashMap<String, DeathInfo>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -100,6 +110,14 @@ pub enum WsEvent {
     PlayerLeft {
         instance_id: String,
         player: String,
+    },
+    PlayerDied {
+        instance_id: String,
+        player: String,
+        x: Option<i32>,
+        y: Option<i32>,
+        z: Option<i32>,
+        dimension: Option<String>,
     },
     BackupDone {
         instance_id: String,

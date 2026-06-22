@@ -183,6 +183,7 @@ pub async fn add_instance(
         cpu_pct: None,
         low_tps_streak: 0,
         high_ram_alerted: false,
+        last_deaths: std::collections::HashMap::new(),
     };
 
     let info = InstanceInfo::from(&inst_state);

@@ -6,7 +6,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::metrics;
-use crate::state::{AppState, InstanceStatus, LogLine, ProcessHandle, WsEvent};
+use crate::state::{AppState, DeathInfo, InstanceStatus, LogLine, ProcessHandle, WsEvent};
 
 pub async fn start_instance(state: Arc<AppState>, instance_id: &str) -> Result<(), String> {
     {
@@ -383,6 +383,40 @@ async fn process_log_line(state: &AppState, instance_id: &str, line: &str) {
             player,
         });
     }
+
+    if let Some((player, x, y, z, dimension)) = parse_gravestone_death(line) {
+        let death = DeathInfo { timestamp, x: Some(x), y: Some(y), z: Some(z), dimension: Some(dimension.clone()) };
+        {
+            let mut instances = state.instances.write().await;
+            if let Some(inst) = instances.get_mut(instance_id) {
+                inst.last_deaths.insert(player.clone(), death);
+            }
+        }
+        let _ = state.log_tx.send(WsEvent::PlayerDied {
+            instance_id: instance_id.to_string(),
+            player,
+            x: Some(x),
+            y: Some(y),
+            z: Some(z),
+            dimension: Some(dimension),
+        });
+    } else if let Some(player) = parse_vanilla_death(line) {
+        let death = DeathInfo { timestamp, x: None, y: None, z: None, dimension: None };
+        {
+            let mut instances = state.instances.write().await;
+            if let Some(inst) = instances.get_mut(instance_id) {
+                inst.last_deaths.insert(player.clone(), death);
+            }
+        }
+        let _ = state.log_tx.send(WsEvent::PlayerDied {
+            instance_id: instance_id.to_string(),
+            player,
+            x: None,
+            y: None,
+            z: None,
+            dimension: None,
+        });
+    }
 }
 
 fn parse_player_event(line: &str, suffix: &str) -> Option<String> {
@@ -394,6 +428,77 @@ fn parse_player_event(line: &str, suffix: &str) -> Option<String> {
     let name = msg.strip_suffix(&format!(" {}", suffix))?;
     // Basic sanity check: player names are 3-16 alphanumeric/underscore chars
     if name.len() >= 2 && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        Some(name.to_string())
+    } else {
+        None
+    }
+}
+
+// Parses gravestone mod log: "Placed PlayerName's gravestone at (X, Y, Z) in minecraft:overworld"
+fn parse_gravestone_death(line: &str) -> Option<(String, i32, i32, i32, String)> {
+    let msg = line.splitn(2, "]: ").nth(1)?;
+    let rest = msg.strip_prefix("Placed ")?;
+    let apostrophe = rest.find("'s gravestone at (")?;
+    let player = rest[..apostrophe].to_string();
+    let after_open = &rest[apostrophe + "'s gravestone at (".len()..];
+    let close = after_open.find(')')?;
+    let mut parts = after_open[..close].splitn(3, ", ");
+    let x: i32 = parts.next()?.trim().parse().ok()?;
+    let y: i32 = parts.next()?.trim().parse().ok()?;
+    let z: i32 = parts.next()?.trim().parse().ok()?;
+    let dimension = after_open[close + 1..].strip_prefix(" in ")?.trim().to_string();
+    Some((player, x, y, z, dimension))
+}
+
+// Detects vanilla death messages to record that a player died (coordinates unknown).
+fn parse_vanilla_death(line: &str) -> Option<String> {
+    if !line.contains("[Server thread/INFO]") {
+        return None;
+    }
+    let msg = line.splitn(2, "]: ").nth(1)?;
+    let space_pos = msg.find(' ')?;
+    let name = &msg[..space_pos];
+    if name.len() < 2 || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return None;
+    }
+    let rest = &msg[space_pos..];
+    const DEATH_FRAGMENTS: &[&str] = &[
+        " was slain by",
+        " was shot by",
+        " was killed by",
+        " was pummeled by",
+        " was impaled by",
+        " was impaled on",
+        " was blown up by",
+        " was squashed by",
+        " was squished too much",
+        " was struck by lightning",
+        " was poked to death",
+        " was frozen to death by",
+        " drowned",
+        " froze to death",
+        " blew up",
+        " burned to death",
+        " went up in flames",
+        " tried to swim in lava",
+        " was pricked to death",
+        " starved to death",
+        " suffocated in a wall",
+        " fell from a high place",
+        " fell off",
+        " fell into a patch of",
+        " fell while climbing",
+        " fell out of the world",
+        " hit the ground too hard",
+        " experienced kinetic energy",
+        " discovered the floor was lava",
+        " walked into fire",
+        " withered away",
+        " died",
+        " was doomed to fall",
+        " didn't want to live",
+    ];
+    if DEATH_FRAGMENTS.iter().any(|f| rest.starts_with(f)) {
         Some(name.to_string())
     } else {
         None

@@ -438,6 +438,60 @@ async fn cmd(
     Ok(())
 }
 
+async fn autocomplete_player<'a>(ctx: Context<'a>, partial: &'a str) -> Vec<String> {
+    let instances = ctx.data().state.instances.read().await;
+    let partial_lower = partial.to_lowercase();
+    let mut names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for inst in instances.values() {
+        for name in inst.last_deaths.keys() {
+            names.insert(name.clone());
+        }
+        for name in &inst.players {
+            names.insert(name.clone());
+        }
+    }
+    let mut matches: Vec<String> = names
+        .into_iter()
+        .filter(|n| n.to_lowercase().contains(&partial_lower))
+        .collect();
+    matches.sort();
+    matches
+}
+
+/// Show where a player last died
+#[poise::command(slash_command)]
+async fn lastdeath(
+    ctx: Context<'_>,
+    #[description = "Player name"]
+    #[autocomplete = "autocomplete_player"]
+    player: String,
+) -> Result<(), Error> {
+    let instances = ctx.data().state.instances.read().await;
+    let death = instances
+        .values()
+        .filter_map(|inst| inst.last_deaths.get(&player))
+        .max_by_key(|d| d.timestamp);
+
+    let msg = match death {
+        None => format!("No death recorded for **{}** since the bot started.", player),
+        Some(d) => {
+            let time = chrono::DateTime::<chrono::Utc>::from_timestamp_secs(d.timestamp)
+                .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
+                .unwrap_or_else(|| "unknown time".to_string());
+            match (d.x, d.y, d.z, &d.dimension) {
+                (Some(x), Some(y), Some(z), Some(dim)) => {
+                    let dim_short = dim.trim_start_matches("minecraft:");
+                    format!("💀 **{}** last died at `{}, {}, {}` in **{}** ({})", player, x, y, z, dim_short, time)
+                }
+                _ => format!("💀 **{}** last died at unknown coordinates ({})", player, time),
+            }
+        }
+    };
+
+    ctx.say(msg).await?;
+    Ok(())
+}
+
 // ── Notification task ─────────────────────────────────────────────────────────
 
 async fn notify_task(
@@ -514,6 +568,7 @@ async fn run_bot(state: Arc<AppState>, config: DiscordConfig) {
                 restart(),
                 switch(),
                 players(),
+                lastdeath(),
                 backup_cmd(),
                 cmd(),
                 ip(),
