@@ -12,6 +12,8 @@ use crate::{
     ban,
     ban::{BannedIp, BannedPlayer},
     config::{data_dir, BackupConfig, DiscordNotifyConfig, InstanceConfig, InstanceMeta, RestartConfig, ServerConfig},
+    datapack_mgr,
+    datapack_mgr::{DatapackEntry, DatapackSearchHit, DatapackUpdate},
     ftb, instance, mod_mgr, modpack, setup, whitelist,
     mod_mgr::{ModEntry, ModSearchHit, ModUpdate},
     whitelist::WhitelistEntry,
@@ -468,6 +470,160 @@ pub async fn add_mod_to_instance(
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(Json(entries))
+}
+
+// ── Datapack handlers ─────────────────────────────────────────────────────────
+
+pub async fn list_datapacks(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<DatapackEntry>>> {
+    let instances = state.instances.read().await;
+    let inst = instances
+        .get(&id)
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+    Ok(Json(datapack_mgr::read_lock(&inst.instance_dir).datapacks))
+}
+
+pub async fn scan_datapacks(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<DatapackEntry>>> {
+    let (server_path, instance_dir) = {
+        let instances = state.instances.read().await;
+        let inst = instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+        (inst.config.server.path.clone(), inst.instance_dir.clone())
+    };
+    let lock = datapack_mgr::scan_datapacks(&state.http_client, &server_path, &instance_dir)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(lock.datapacks))
+}
+
+pub async fn get_datapack_updates(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<DatapackUpdate>>> {
+    let (instance_dir, mc_version) = {
+        let instances = state.instances.read().await;
+        let inst = instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+        (
+            inst.instance_dir.clone(),
+            inst.config.instance.minecraft_version.clone(),
+        )
+    };
+    let lock = datapack_mgr::read_lock(&instance_dir);
+    let updates = datapack_mgr::check_updates(&state.http_client, &lock, &mc_version)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(updates))
+}
+
+pub async fn search_datapacks_for_instance(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(params): Query<SearchModsQuery>,
+) -> ApiResult<Json<Vec<DatapackSearchHit>>> {
+    let mc_version = {
+        let instances = state.instances.read().await;
+        let inst = instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+        inst.config.instance.minecraft_version.clone()
+    };
+    let hits = datapack_mgr::search_datapacks(&state.http_client, &params.term, &mc_version)
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, e))?;
+    Ok(Json(hits))
+}
+
+pub async fn add_datapack_to_instance(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<AddModRequest>,
+) -> ApiResult<Json<DatapackEntry>> {
+    let (server_path, instance_dir) = {
+        let instances = state.instances.read().await;
+        let inst = instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+        (inst.config.server.path.clone(), inst.instance_dir.clone())
+    };
+    let entry = datapack_mgr::add_datapack(
+        &state.http_client,
+        &req.project_id,
+        &req.version_id,
+        &server_path,
+        &instance_dir,
+    )
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(entry))
+}
+
+pub async fn update_single_datapack(
+    State(state): State<Arc<AppState>>,
+    Path((id, project_id)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let (server_path, instance_dir, mc_version) = {
+        let instances = state.instances.read().await;
+        let inst = instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+        (
+            inst.config.server.path.clone(),
+            inst.instance_dir.clone(),
+            inst.config.instance.minecraft_version.clone(),
+        )
+    };
+    let mut lock = datapack_mgr::read_lock(&instance_dir);
+    let updates = datapack_mgr::check_updates(&state.http_client, &lock, &mc_version)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let update = updates
+        .iter()
+        .find(|u| u.project_id == project_id)
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "No update available for this datapack"))?
+        .clone();
+    datapack_mgr::apply_update(&state.http_client, &update, &server_path, &mut lock)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    datapack_mgr::write_lock(&instance_dir, &lock)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn update_all_datapacks(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    let (server_path, instance_dir, mc_version) = {
+        let instances = state.instances.read().await;
+        let inst = instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+        (
+            inst.config.server.path.clone(),
+            inst.instance_dir.clone(),
+            inst.config.instance.minecraft_version.clone(),
+        )
+    };
+    let mut lock = datapack_mgr::read_lock(&instance_dir);
+    let updates = datapack_mgr::check_updates(&state.http_client, &lock, &mc_version)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    for update in &updates {
+        datapack_mgr::apply_update(&state.http_client, update, &server_path, &mut lock)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("{}: {}", update.name, e)))?;
+    }
+    datapack_mgr::write_lock(&instance_dir, &lock)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ── Version update ────────────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ mod instance;
 mod java;
 mod metrics;
 mod metrics_db;
+mod datapack_mgr;
 mod mod_mgr;
 mod modpack;
 mod restart;
@@ -117,6 +118,12 @@ async fn main() {
         .route("/api/instances/{id}/mods/add", post(api::add_mod_to_instance))
         .route("/api/instances/{id}/mods/update-all", post(api::update_all_mods))
         .route("/api/instances/{id}/mods/{project_id}/update", post(api::update_single_mod))
+        .route("/api/instances/{id}/datapacks", get(api::list_datapacks).post(api::scan_datapacks))
+        .route("/api/instances/{id}/datapacks/updates", get(api::get_datapack_updates))
+        .route("/api/instances/{id}/datapacks/search", get(api::search_datapacks_for_instance))
+        .route("/api/instances/{id}/datapacks/add", post(api::add_datapack_to_instance))
+        .route("/api/instances/{id}/datapacks/update-all", post(api::update_all_datapacks))
+        .route("/api/instances/{id}/datapacks/{project_id}/update", post(api::update_single_datapack))
         .route("/api/instances/{id}/update-version", post(api::update_server_version))
         .route("/api/whitelist", get(api::get_whitelist).post(api::add_to_whitelist))
         .route("/api/whitelist/{name}", axum::routing::delete(api::remove_from_whitelist))

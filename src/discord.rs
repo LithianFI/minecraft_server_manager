@@ -363,10 +363,11 @@ async fn mods(ctx: Context<'_>) -> Result<(), Error> {
         }
     };
 
-    let lock = crate::mod_mgr::read_lock(&instance_dir);
+    let mod_lock = crate::mod_mgr::read_lock(&instance_dir);
+    let dp_lock  = crate::datapack_mgr::read_lock(&instance_dir);
 
-    if lock.mods.is_empty() {
-        ctx.say("No mods found. Run a mod scan from the dashboard first.").await?;
+    if mod_lock.mods.is_empty() && dp_lock.datapacks.is_empty() {
+        ctx.say("No mods or datapacks found. Run a scan from the dashboard first.").await?;
         return Ok(());
     }
 
@@ -380,14 +381,38 @@ async fn mods(ctx: Context<'_>) -> Result<(), Error> {
         .unwrap_or_default();
 
     let mut lines = format!(
-        "Mods for {} — Minecraft {} | {} — {} installed\n{}\n",
-        display_name, mc_version, loader_display, lock.mods.len(), modpack_line
+        "{} — Minecraft {} | {} — {} mod{}, {} datapack{}\n{}\n",
+        display_name,
+        mc_version,
+        loader_display,
+        mod_lock.mods.len(),
+        if mod_lock.mods.len() == 1 { "" } else { "s" },
+        dp_lock.datapacks.len(),
+        if dp_lock.datapacks.len() == 1 { "" } else { "s" },
+        modpack_line,
     );
-    for m in &lock.mods {
-        lines.push_str(&format!(
-            "{} v{} — https://modrinth.com/mod/{}\n",
-            m.name, m.version_number, m.modrinth_project_id
-        ));
+
+    if !mod_lock.mods.is_empty() {
+        lines.push_str(&format!("── Mods ({}) ──\n", mod_lock.mods.len()));
+        for m in &mod_lock.mods {
+            lines.push_str(&format!(
+                "{} v{} — https://modrinth.com/mod/{}\n",
+                m.name, m.version_number, m.modrinth_project_id
+            ));
+        }
+    }
+
+    if !dp_lock.datapacks.is_empty() {
+        if !mod_lock.mods.is_empty() {
+            lines.push('\n');
+        }
+        lines.push_str(&format!("── Datapacks ({}) ──\n", dp_lock.datapacks.len()));
+        for d in &dp_lock.datapacks {
+            lines.push_str(&format!(
+                "{} v{} — https://modrinth.com/datapack/{}\n",
+                d.name, d.version_number, d.modrinth_project_id
+            ));
+        }
     }
 
     let modpack_suffix = modpack_project_id.as_deref()
@@ -397,8 +422,15 @@ async fn mods(ctx: Context<'_>) -> Result<(), Error> {
     ctx.send(
         poise::CreateReply::default()
             .content(format!(
-                "📦 **{}** — Minecraft {} | {} — {} mods installed{}",
-                display_name, mc_version, loader_display, lock.mods.len(), modpack_suffix
+                "📦 **{}** — Minecraft {} | {} — {} mod{}, {} datapack{}{}",
+                display_name,
+                mc_version,
+                loader_display,
+                mod_lock.mods.len(),
+                if mod_lock.mods.len() == 1 { "" } else { "s" },
+                dp_lock.datapacks.len(),
+                if dp_lock.datapacks.len() == 1 { "" } else { "s" },
+                modpack_suffix,
             ))
             .attachment(serenity::CreateAttachment::bytes(lines.into_bytes(), "mods.txt")),
     )

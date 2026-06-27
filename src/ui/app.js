@@ -2,7 +2,8 @@
 const instances  = new Map()   // id → InstanceInfo
 const logs       = new Map()   // id → [{line, timestamp}]
 const backups    = new Map()   // id → [BackupInfo]
-const modsData   = new Map()   // id → { mods: [], updates: null }
+const modsData       = new Map()   // id → { mods: [], updates: null }
+const datapacksData  = new Map()   // id → { datapacks: [], updates: null }
 let   detailId   = null
 let   logPinned  = true
 let   logFilter  = 'all'
@@ -212,6 +213,7 @@ function showDetail(id) {
   renderLogs()
   loadBackups(id)
   loadMods(id)
+  loadDatapacks(id)
 }
 
 function showDashboard() {
@@ -447,9 +449,10 @@ function setDetailError(msg) {
 function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name))
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('hidden', p.id !== 'tab-' + name))
-  if (name === 'backups'  && detailId) renderBackups()
-  if (name === 'mods'     && detailId) renderMods()
-  if (name === 'stats'    && detailId) loadStats(detailId)
+  if (name === 'backups'    && detailId) renderBackups()
+  if (name === 'mods'       && detailId) renderMods()
+  if (name === 'datapacks'  && detailId) renderDatapacks()
+  if (name === 'stats'      && detailId) loadStats(detailId)
   if (name === 'settings' && detailId) { loadSettings(detailId); loadDiskUsage(detailId); loadBackupConfig(detailId); loadAlertsConfig(detailId); loadSchedules(detailId) }
 }
 
@@ -1133,6 +1136,310 @@ function setModsMsg(text, type) {
   if (_modsMsgTimer) clearTimeout(_modsMsgTimer)
   if (type === 'success') {
     _modsMsgTimer = setTimeout(() => el.classList.add('hidden'), 8000)
+  }
+}
+
+// ─── Datapacks ────────────────────────────────────────────────────────────────
+async function loadDatapacks(id) {
+  try {
+    const datapacks = await api('GET', `/api/instances/${id}/datapacks`)
+    datapacksData.set(id, { datapacks: datapacks ?? [], updates: datapacksData.get(id)?.updates ?? null })
+    if (detailId === id) renderDatapacks()
+  } catch { /* silent */ }
+}
+
+function renderDatapacks() {
+  const data = detailId ? (datapacksData.get(detailId) ?? null) : null
+  const container = document.getElementById('datapack-list')
+  if (!container) return
+
+  const btnCheck = document.getElementById('btn-check-dp-updates')
+  const btnAll   = document.getElementById('btn-update-all-dp')
+
+  if (data === null) {
+    container.innerHTML = '<div class="placeholder">Loading…</div>'
+    return
+  }
+
+  const { datapacks, updates } = data
+  const updateMap = updates ? Object.fromEntries(updates.map(u => [u.project_id, u])) : null
+
+  if (datapacks.length === 0) {
+    container.innerHTML = `<div class="mods-empty">
+      <p>No datapacks found in the lock file.</p>
+      <p class="mods-empty-hint">Click <strong>Scan Datapacks</strong> to detect datapacks from the world's <code>datapacks/</code> directory.</p>
+    </div>`
+    btnCheck.disabled = true
+    btnAll.disabled   = true
+    return
+  }
+
+  btnCheck.disabled = false
+  const updateCount = updates ? updates.length : 0
+  btnAll.disabled   = updateCount === 0
+  btnAll.textContent = updateCount > 0 ? `Update All (${updateCount})` : 'Update All'
+
+  container.innerHTML = datapacks.map(d => datapackRowHTML(d, updateMap ? updateMap[d.modrinth_project_id] : null)).join('')
+}
+
+function datapackRowHTML(dp, update) {
+  const hasUpdate = !!update
+  const statusClass = update === undefined ? '' : (hasUpdate ? 'has-update' : 'up-to-date')
+  let versionCol = ''
+
+  if (update === undefined) {
+    versionCol = `<span class="mod-version">${esc(dp.version_number)}</span>`
+  } else if (hasUpdate) {
+    versionCol = `
+      <span class="mod-version">${esc(dp.version_number)}</span>
+      <span class="mod-arrow">→</span>
+      <span class="mod-new-version">${esc(update.latest_version_number)}</span>`
+  } else {
+    versionCol = `
+      <span class="mod-version">${esc(dp.version_number)}</span>
+      <span class="mod-uptodate">✓</span>`
+  }
+
+  const updateBtn = hasUpdate
+    ? `<button class="btn-outline btn-mod-update" onclick="doUpdateDatapack('${esc(dp.modrinth_project_id)}', this)">Update</button>`
+    : ''
+
+  return `<div class="mod-row ${statusClass}">
+    <div class="mod-name">${esc(dp.name)}</div>
+    <div class="mod-version-cell">${versionCol}</div>
+    ${updateBtn}
+  </div>`
+}
+
+async function doScanDatapacks() {
+  if (!detailId) return
+  const btn = document.getElementById('btn-scan-datapacks')
+  btn.disabled = true
+  setDatapacksMsg('Scanning datapacks directory…', '')
+  try {
+    const datapacks = await api('POST', `/api/instances/${detailId}/datapacks`)
+    datapacksData.set(detailId, { datapacks: datapacks ?? [], updates: null })
+    renderDatapacks()
+    setDatapacksMsg(`Found ${datapacks.length} datapack${datapacks.length !== 1 ? 's' : ''} on Modrinth.`, 'success')
+  } catch (e) {
+    setDatapacksMsg('Scan failed: ' + e.message, 'error')
+  } finally {
+    btn.disabled = false
+  }
+}
+
+async function doCheckDatapackUpdates() {
+  if (!detailId) return
+  const btn = document.getElementById('btn-check-dp-updates')
+  btn.disabled = true
+  setDatapacksMsg('Checking Modrinth for updates…', '')
+  try {
+    const updates = await api('GET', `/api/instances/${detailId}/datapacks/updates`)
+    const data = datapacksData.get(detailId) ?? { datapacks: [], updates: null }
+    datapacksData.set(detailId, { ...data, updates: updates ?? [] })
+    renderDatapacks()
+    const n = (updates ?? []).length
+    setDatapacksMsg(n > 0 ? `${n} update${n !== 1 ? 's' : ''} available.` : 'All datapacks are up to date.', n > 0 ? '' : 'success')
+  } catch (e) {
+    setDatapacksMsg('Update check failed: ' + e.message, 'error')
+  } finally {
+    btn.disabled = false
+  }
+}
+
+async function doUpdateDatapack(projectId, btnEl) {
+  if (!detailId) return
+  btnEl.disabled = true
+  setDatapacksMsg('Updating datapack…', '')
+  try {
+    await api('POST', `/api/instances/${detailId}/datapacks/${encodeURIComponent(projectId)}/update`)
+    const datapacks = await api('GET', `/api/instances/${detailId}/datapacks`)
+    const data = datapacksData.get(detailId)
+    const newUpdates = data?.updates?.filter(u => u.project_id !== projectId) ?? null
+    datapacksData.set(detailId, { datapacks: datapacks ?? [], updates: newUpdates })
+    renderDatapacks()
+    setDatapacksMsg('Datapack updated.', 'success')
+  } catch (e) {
+    setDatapacksMsg('Update failed: ' + e.message, 'error')
+    btnEl.disabled = false
+  }
+}
+
+async function doUpdateAllDatapacks() {
+  if (!detailId) return
+  const btn = document.getElementById('btn-update-all-dp')
+  btn.disabled = true
+  setDatapacksMsg('Updating all datapacks…', '')
+  try {
+    await api('POST', `/api/instances/${detailId}/datapacks/update-all`)
+    const datapacks = await api('GET', `/api/instances/${detailId}/datapacks`)
+    datapacksData.set(detailId, { datapacks: datapacks ?? [], updates: [] })
+    renderDatapacks()
+    setDatapacksMsg('All datapacks updated.', 'success')
+  } catch (e) {
+    setDatapacksMsg('Update failed: ' + e.message, 'error')
+    btn.disabled = false
+  }
+}
+
+let _dpMsgTimer = null
+function setDatapacksMsg(text, type) {
+  const el = document.getElementById('datapacks-status-msg')
+  if (!el) return
+  el.textContent = text
+  el.className = 'mods-msg' + (type ? ' ' + type : '')
+  el.classList.remove('hidden')
+  if (_dpMsgTimer) clearTimeout(_dpMsgTimer)
+  if (type === 'success') {
+    _dpMsgTimer = setTimeout(() => el.classList.add('hidden'), 8000)
+  }
+}
+
+let _addDpResults = []
+let _addDpSelectedHit = null
+
+function openAddDatapackModal() {
+  _addDpResults = []
+  _addDpSelectedHit = null
+  document.getElementById('add-dp-search-input').value = ''
+  document.getElementById('add-dp-results').innerHTML = ''
+  document.getElementById('add-dp-results').classList.add('hidden')
+  document.getElementById('add-dp-selected').classList.add('hidden')
+  document.getElementById('add-dp-error').classList.add('hidden')
+  document.getElementById('btn-add-dp-submit').disabled = true
+  document.getElementById('add-dp-modal-backdrop').classList.remove('hidden')
+  setTimeout(() => document.getElementById('add-dp-search-input').focus(), 50)
+}
+
+function closeAddDatapackModal() {
+  document.getElementById('add-dp-modal-backdrop').classList.add('hidden')
+}
+
+function addDpBackdropClose(e) {
+  if (e.target === document.getElementById('add-dp-modal-backdrop')) closeAddDatapackModal()
+}
+
+async function searchModrinthDatapacks() {
+  if (!detailId) return
+  const term = document.getElementById('add-dp-search-input').value.trim()
+  if (!term) return
+
+  const btn = document.getElementById('btn-add-dp-search')
+  const errEl = document.getElementById('add-dp-error')
+  const resultsEl = document.getElementById('add-dp-results')
+  btn.disabled = true
+  btn.textContent = '…'
+  errEl.classList.add('hidden')
+  document.getElementById('add-dp-selected').classList.add('hidden')
+  document.getElementById('btn-add-dp-submit').disabled = true
+  resultsEl.innerHTML = '<div class="ftb-result-item" style="color:var(--text-dim)">Searching…</div>'
+  resultsEl.classList.remove('hidden')
+
+  try {
+    const data = await api('GET', `/api/instances/${detailId}/datapacks/search?term=${encodeURIComponent(term)}`)
+    _addDpResults = data ?? []
+
+    if (_addDpResults.length === 0) {
+      resultsEl.innerHTML = '<div class="ftb-result-item" style="color:var(--text-dim)">No results found.</div>'
+      return
+    }
+
+    resultsEl.innerHTML = _addDpResults.map((hit, i) => {
+      const dl = hit.downloads >= 1_000_000
+        ? `${(hit.downloads / 1_000_000).toFixed(1)}M`
+        : hit.downloads >= 1000
+          ? `${Math.round(hit.downloads / 1000)}k`
+          : String(hit.downloads)
+      return `
+        <div class="ftb-result-item" onclick="selectAddDpHit(${i})">
+          <div class="ftb-result-name">${esc(hit.title)} <span class="mod-dl-count">${dl} downloads</span></div>
+          <div class="ftb-result-desc">${esc(hit.description)}</div>
+        </div>`
+    }).join('')
+  } catch (err) {
+    errEl.textContent = err.message
+    errEl.classList.remove('hidden')
+    resultsEl.classList.add('hidden')
+  } finally {
+    btn.disabled = false
+    btn.textContent = 'Search'
+  }
+}
+
+async function selectAddDpHit(index) {
+  _addDpSelectedHit = _addDpResults[index]
+
+  document.querySelectorAll('#add-dp-results .ftb-result-item').forEach((el, i) => {
+    el.classList.toggle('selected', i === index)
+  })
+
+  const errEl = document.getElementById('add-dp-error')
+  errEl.classList.add('hidden')
+  document.getElementById('add-dp-title').textContent = _addDpSelectedHit.title
+  document.getElementById('add-dp-desc').textContent = _addDpSelectedHit.description
+  document.getElementById('add-dp-selected').classList.remove('hidden')
+  document.getElementById('btn-add-dp-submit').disabled = true
+
+  const select = document.getElementById('add-dp-version')
+  select.innerHTML = '<option>Loading versions…</option>'
+
+  try {
+    const inst = instances.get(detailId)
+    const mcVer = inst?.minecraft_version ?? ''
+    const versionsParam = encodeURIComponent(JSON.stringify([mcVer]))
+
+    const versions = await fetch(
+      `https://api.modrinth.com/v2/project/${encodeURIComponent(_addDpSelectedHit.project_id)}/version?game_versions=${versionsParam}`,
+      { headers: { 'User-Agent': 'msm/0.1' } }
+    ).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      return r.json()
+    })
+
+    if (!versions.length) {
+      select.innerHTML = '<option value="">No compatible versions</option>'
+      errEl.textContent = `No versions compatible with MC ${mcVer}`
+      errEl.classList.remove('hidden')
+      return
+    }
+
+    select.innerHTML = versions.map(v =>
+      `<option value="${esc(v.id)}">${esc(v.name || v.version_number)} — ${esc(v.version_number)}</option>`
+    ).join('')
+    document.getElementById('btn-add-dp-submit').disabled = false
+  } catch (err) {
+    select.innerHTML = ''
+    errEl.textContent = 'Failed to load versions: ' + err.message
+    errEl.classList.remove('hidden')
+  }
+}
+
+async function submitAddDatapack() {
+  if (!detailId || !_addDpSelectedHit) return
+  const versionId = document.getElementById('add-dp-version').value
+  if (!versionId) return
+
+  const btn = document.getElementById('btn-add-dp-submit')
+  const errEl = document.getElementById('add-dp-error')
+  btn.disabled = true
+  btn.textContent = 'Adding…'
+  errEl.classList.add('hidden')
+
+  try {
+    await api('POST', `/api/instances/${detailId}/datapacks/add`, {
+      project_id: _addDpSelectedHit.project_id,
+      version_id: versionId,
+    })
+    const datapacks = await api('GET', `/api/instances/${detailId}/datapacks`)
+    datapacksData.set(detailId, { datapacks: datapacks ?? [], updates: null })
+    renderDatapacks()
+    closeAddDatapackModal()
+    setDatapacksMsg(`Added ${_addDpSelectedHit.title}.`, 'success')
+  } catch (err) {
+    errEl.textContent = 'Failed to add datapack: ' + err.message
+    errEl.classList.remove('hidden')
+    btn.disabled = false
+    btn.textContent = 'Add Datapack'
   }
 }
 

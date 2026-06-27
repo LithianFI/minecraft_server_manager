@@ -78,6 +78,7 @@
   <nav class="tab-nav">
     <button class="tab-btn active" data-tab="logs"     onclick="switchTab('logs')">Logs</button>
     <button class="tab-btn"        data-tab="mods"     onclick="switchTab('mods')">Mods</button>
+    <button class="tab-btn"        data-tab="datapacks" onclick="switchTab('datapacks')">Datapacks</button>
     <button class="tab-btn"        data-tab="backups"  onclick="switchTab('backups')">Backups</button>
     <button class="tab-btn"        data-tab="stats"    onclick="switchTab('stats')">Stats</button>
     <button class="tab-btn"        data-tab="settings" onclick="switchTab('settings')">Settings</button>
@@ -121,6 +122,17 @@
     </div>
     <div id="mod-list"></div>
   </div>
+  <div id="tab-datapacks" class="tab-panel hidden">
+    <div class="mods-toolbar">
+      <button class="btn-outline" id="btn-scan-datapacks" onclick="doScanDatapacks()">⟳ Scan Datapacks</button>
+      <button class="btn-outline" id="btn-check-dp-updates" onclick="doCheckDatapackUpdates()" disabled>↑ Check Updates</button>
+      <button class="btn-primary" id="btn-update-all-dp" onclick="doUpdateAllDatapacks()" disabled>Update All</button>
+      <button class="btn-outline" id="btn-add-datapack" onclick="openAddDatapackModal()">+ Add Datapack</button>
+      <span id="datapacks-status-msg" class="mods-msg hidden"></span>
+    </div>
+    <div id="datapack-list"></div>
+  </div>
+
   <div id="tab-settings" class="tab-panel hidden">
     <div class="settings-body">
 
@@ -744,6 +756,47 @@
     <div class="modal-footer">
       <button class="btn-outline" onclick="closeDiscordNotifyModal()">Cancel</button>
       <button class="btn-primary" onclick="saveDiscordNotify()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════ ADD DATAPACK MODAL ═══════════════════════ -->
+<div id="add-dp-modal-backdrop" class="modal-backdrop hidden" onclick="addDpBackdropClose(event)">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h3>Add Datapack from Modrinth</h3>
+      <button class="btn-close" onclick="closeAddDatapackModal()">✕</button>
+    </div>
+
+    <div class="setup-form-body">
+      <div class="field">
+        <label>Search Datapacks</label>
+        <div class="import-search-row">
+          <input id="add-dp-search-input" type="text" placeholder="e.g. Terralith, Vanilla Tweaks, Dungeons…"
+                 onkeydown="if(event.key==='Enter'){searchModrinthDatapacks()}">
+          <button id="btn-add-dp-search" class="btn-outline" type="button" onclick="searchModrinthDatapacks()">Search</button>
+        </div>
+      </div>
+
+      <div id="add-dp-results" class="ftb-results hidden"></div>
+
+      <div id="add-dp-selected" class="hidden">
+        <div class="import-project-preview">
+          <div class="import-project-name" id="add-dp-title"></div>
+          <div class="import-project-desc" id="add-dp-desc"></div>
+        </div>
+        <div class="field">
+          <label>Version</label>
+          <select id="add-dp-version" class="prop-select"></select>
+        </div>
+      </div>
+
+      <div id="add-dp-error" class="error-msg hidden"></div>
+    </div>
+
+    <div class="modal-footer">
+      <button type="button" class="btn-outline" onclick="closeAddDatapackModal()">Cancel</button>
+      <button id="btn-add-dp-submit" class="btn-primary" onclick="submitAddDatapack()" disabled>Add Datapack</button>
     </div>
   </div>
 </div>
