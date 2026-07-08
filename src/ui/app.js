@@ -3092,6 +3092,7 @@ async function openDiscordNotifyModal() {
   document.getElementById('dn-backup-done').checked  = cfg.backup_done
   document.getElementById('dn-backup-failed').checked = cfg.backup_failed
   document.getElementById('dn-health-alerts').checked = cfg.health_alerts
+  document.getElementById('dn-mods-installed').checked = cfg.mods_installed
   document.getElementById('discord-notify-msg').classList.add('hidden')
   document.getElementById('discord-notify-modal').classList.remove('hidden')
 }
@@ -3112,6 +3113,7 @@ async function saveDiscordNotify() {
     backup_done:     document.getElementById('dn-backup-done').checked,
     backup_failed:   document.getElementById('dn-backup-failed').checked,
     health_alerts:   document.getElementById('dn-health-alerts').checked,
+    mods_installed:  document.getElementById('dn-mods-installed').checked,
   }
   const res = await fetch('/api/discord-notify', {
     method: 'POST',

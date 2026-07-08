@@ -6,6 +6,8 @@ use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
 
 use std::sync::Arc;
 use crate::config::{DiscordNotifyConfig, GlobalConfig, InstanceConfig};
+use crate::datapack_mgr::DatapackEntry;
+use crate::mod_mgr::ModEntry;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -176,6 +178,14 @@ pub enum WsEvent {
         instance_id: String,
         kind: String,
         message: String,
+    },
+    ModsInstalled {
+        instance_id: String,
+        mods: Vec<ModEntry>,
+    },
+    DatapacksInstalled {
+        instance_id: String,
+        datapacks: Vec<DatapackEntry>,
     },
 }
 

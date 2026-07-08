@@ -32,6 +32,8 @@ pub struct DiscordNotifyConfig {
     pub backup_failed: bool,
     #[serde(default = "default_true")]
     pub health_alerts: bool,
+    #[serde(default = "default_true")]
+    pub mods_installed: bool,
 }
 
 impl Default for DiscordNotifyConfig {
@@ -43,6 +45,7 @@ impl Default for DiscordNotifyConfig {
             backup_done: true,
             backup_failed: true,
             health_alerts: true,
+            mods_installed: true,
         }
     }
 }

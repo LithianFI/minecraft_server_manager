@@ -17,7 +17,7 @@ use crate::{
     ftb, instance, mod_mgr, modpack, setup, whitelist,
     mod_mgr::{ModEntry, ModSearchHit, ModUpdate},
     whitelist::WhitelistEntry,
-    state::{AppState, InstanceInfo, InstanceState, InstanceStatus, LogLine},
+    state::{AppState, InstanceInfo, InstanceState, InstanceStatus, LogLine, WsEvent},
 };
 
 #[derive(Serialize)]
@@ -469,6 +469,12 @@ pub async fn add_mod_to_instance(
     )
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    if !entries.is_empty() {
+        let _ = state.log_tx.send(WsEvent::ModsInstalled {
+            instance_id: id,
+            mods: entries.clone(),
+        });
+    }
     Ok(Json(entries))
 }
 
@@ -562,6 +568,10 @@ pub async fn add_datapack_to_instance(
     )
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let _ = state.log_tx.send(WsEvent::DatapacksInstalled {
+        instance_id: id,
+        datapacks: vec![entry.clone()],
+    });
     Ok(Json(entry))
 }
 

@@ -557,6 +557,36 @@ async fn notify_task(
                         let icon = if kind == "tps" { "⚠️" } else { "🔥" };
                         Some(format!("{} **{}** health alert: {}", icon, instance_id, message))
                     }
+                    WsEvent::ModsInstalled { instance_id, mods } if cfg.mods_installed => {
+                        let mut msg = format!(
+                            "📦 **{}** mod{} installed on **{}**:\n",
+                            mods.len(),
+                            if mods.len() == 1 { "" } else { "s" },
+                            instance_id
+                        );
+                        for m in mods {
+                            msg.push_str(&format!(
+                                "• {} v{} — <https://modrinth.com/mod/{}>\n",
+                                m.name, m.version_number, m.modrinth_project_id
+                            ));
+                        }
+                        Some(msg)
+                    }
+                    WsEvent::DatapacksInstalled { instance_id, datapacks } if cfg.mods_installed => {
+                        let mut msg = format!(
+                            "📦 **{}** datapack{} installed on **{}**:\n",
+                            datapacks.len(),
+                            if datapacks.len() == 1 { "" } else { "s" },
+                            instance_id
+                        );
+                        for d in datapacks {
+                            msg.push_str(&format!(
+                                "• {} v{} — <https://modrinth.com/datapack/{}>\n",
+                                d.name, d.version_number, d.modrinth_project_id
+                            ));
+                        }
+                        Some(msg)
+                    }
                     _ => None,
                 };
                 if let Some(text) = msg {
