@@ -524,6 +524,60 @@ async fn lastdeath(
     Ok(())
 }
 
+// Parses the console reply to `seed`: "... Seed: [1234567890]"
+fn parse_seed(line: &str) -> Option<String> {
+    let rest = &line[line.find("Seed: [")? + 7..];
+    let seed = &rest[..rest.find(']')?];
+    if seed.is_empty() || !seed.chars().all(|c| c.is_ascii_digit() || c == '-') {
+        return None;
+    }
+    Some(seed.to_string())
+}
+
+/// Show the world seed of the running server
+#[poise::command(slash_command)]
+async fn seed(ctx: Context<'_>) -> Result<(), Error> {
+    let state = ctx.data().state.clone();
+    let Some((id, display)) = running_instance(&state).await else {
+        ctx.say("⚫ No server is running.").await?;
+        return Ok(());
+    };
+
+    ctx.defer().await?;
+
+    // Subscribe before sending the command so the response line can't be missed
+    let mut rx = state.log_tx.subscribe();
+
+    if let Err(e) = instance::send_command(state.clone(), &id, "seed".to_string()).await {
+        ctx.say(format!("❌ {}", e)).await?;
+        return Ok(());
+    }
+
+    let seed = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match rx.recv().await {
+                Ok(WsEvent::LogLine { instance_id, line, .. }) if instance_id == id => {
+                    if let Some(s) = parse_seed(&line) {
+                        return Some(s);
+                    }
+                }
+                Ok(_) => {}
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    })
+    .await
+    .ok()
+    .flatten();
+
+    match seed {
+        Some(s) => ctx.say(format!("🌱 **{}** world seed: `{}`", display, s)).await?,
+        None => ctx.say("❌ Timed out waiting for the server to report the seed.").await?,
+    };
+    Ok(())
+}
+
 // ── Notification task ─────────────────────────────────────────────────────────
 
 async fn notify_task(
@@ -631,6 +685,7 @@ async fn run_bot(state: Arc<AppState>, config: DiscordConfig) {
                 switch(),
                 players(),
                 lastdeath(),
+                seed(),
                 backup_cmd(),
                 cmd(),
                 ip(),
