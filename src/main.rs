@@ -176,12 +176,15 @@ async fn main() {
         discord::start_bot(state.clone(), discord_cfg);
     }
 
-    tokio::spawn(async move {
-        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-        if let Err(e) = open::that(format!("http://localhost:{}", port)) {
-            tracing::warn!("Could not open browser: {}", e);
-        }
-    });
+    // Only open a browser when run interactively — not under systemd or Docker
+    if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+            if let Err(e) = open::that(format!("http://localhost:{}", port)) {
+                tracing::warn!("Could not open browser: {}", e);
+            }
+        });
+    }
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     // Not axum's graceful shutdown: it would wait forever on open SSE (/events) streams

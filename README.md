@@ -73,13 +73,13 @@ All data lives in `~/.local/share/msm/`.
 
 ### Web dashboard
 
-Runs on port `7331` by default. Open `http://localhost:7331` after starting.
+Runs on port `8080` by default. Open `http://localhost:8080` after starting.
 
 To change the port, create `~/.local/share/msm/config.toml`:
 
 ```toml
 [web]
-port = 8080
+port = 7331
 ```
 
 ### Discord bot
@@ -143,7 +143,7 @@ warning_secs  = 300
 ./target/release/minecraft_server_manager
 ```
 
-The dashboard opens in your browser automatically. Logs go to stdout.
+When started from a terminal, the dashboard opens in your browser automatically. Logs go to stdout.
 
 ## Docker
 
