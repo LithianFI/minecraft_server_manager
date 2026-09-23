@@ -58,6 +58,7 @@ pub struct InstanceInfo {
     pub display_name: String,
     pub minecraft_version: String,
     pub loader: Option<String>,
+    pub loader_version: Option<String>,
     pub status: InstanceStatus,
     pub players: Vec<String>,
     pub started_at: Option<i64>,
@@ -81,6 +82,7 @@ impl From<&InstanceState> for InstanceInfo {
                 .unwrap_or_else(|| s.config.instance.name.clone()),
             minecraft_version: s.config.instance.minecraft_version.clone(),
             loader: s.config.instance.loader.clone(),
+            loader_version: s.config.instance.loader_version.clone(),
             status: s.status.clone(),
             players: s.players.iter().cloned().collect(),
             started_at: s.started_at.map(|t| t.timestamp()),
@@ -161,6 +163,7 @@ pub enum WsEvent {
     UpdateDone {
         instance_id: String,
         minecraft_version: String,
+        loader_version: String,
     },
     UpdateFailed {
         instance_id: String,

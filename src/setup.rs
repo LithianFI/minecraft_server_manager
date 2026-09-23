@@ -210,6 +210,32 @@ fn version_key(v: &str) -> Vec<u32> {
 
 // ── Initial server setup ───────────────────────────────────────────────────────
 
+fn loader_name(loader: &str) -> &str {
+    match loader {
+        "neoforge" => "NeoForge",
+        "forge"    => "Forge",
+        "fabric"   => "Fabric",
+        other      => other,
+    }
+}
+
+/// Downloads and runs the installer for `loader` in `server_path`.
+async fn run_loader_installer(
+    state: &Arc<AppState>,
+    loader: &str,
+    minecraft_version: &str,
+    loader_version: &str,
+    server_path: &Path,
+    make_log: Arc<dyn Fn(String) -> WsEvent + Send + Sync + 'static>,
+) -> Result<(), String> {
+    match loader {
+        "neoforge" => download_and_run_installer(state, loader_version, server_path, make_log).await,
+        "forge" => crate::modpack::install_forge(state, minecraft_version, loader_version, server_path, make_log).await,
+        "fabric" => crate::modpack::install_fabric(state, minecraft_version, loader_version, server_path, make_log).await,
+        other => Err(format!("Version updates aren't supported for loader '{}'", other)),
+    }
+}
+
 pub async fn install_server(
     state: Arc<AppState>,
     loader: String,
@@ -232,18 +258,7 @@ pub async fn install_server(
     let make_log: Arc<dyn Fn(String) -> WsEvent + Send + Sync + 'static> =
         Arc::new(|msg| WsEvent::SetupLog { message: msg });
 
-    let result = match loader.as_str() {
-        "neoforge" => download_and_run_installer(&state, &loader_version, &path, make_log).await,
-        "forge" => {
-            crate::modpack::install_forge(&state, &minecraft_version, &loader_version, &path, make_log).await
-        }
-        "fabric" => {
-            crate::modpack::install_fabric(&state, &minecraft_version, &loader_version, &path, make_log).await
-        }
-        other => Err(format!("Unknown loader '{}'", other)),
-    };
-
-    match result {
+    match run_loader_installer(&state, &loader, &minecraft_version, &loader_version, &path, make_log).await {
         Ok(()) => {
             let _ = state.log_tx.send(WsEvent::SetupLog {
                 message: "Installation complete.".to_string(),
@@ -265,7 +280,8 @@ pub async fn install_server(
 pub async fn update_server_version(
     state: Arc<AppState>,
     instance_id: String,
-    neoforge_version: String,
+    minecraft_version: String,
+    loader_version: String,
 ) {
     let send_log = |msg: String| {
         let _ = state.log_tx.send(WsEvent::UpdateLog {
@@ -281,7 +297,7 @@ pub async fn update_server_version(
     };
 
     // Validate: must be stopped
-    let (server_path, instance_dir) = {
+    let (server_path, instance_dir, loader, old_mc) = {
         let instances = state.instances.read().await;
         let inst = match instances.get(&instance_id) {
             Some(i) => i,
@@ -291,29 +307,55 @@ pub async fn update_server_version(
             send_fail("Server must be stopped before updating.".to_string());
             return;
         }
-        (inst.config.server.path.clone(), inst.instance_dir.clone())
+        (
+            inst.config.server.path.clone(),
+            inst.instance_dir.clone(),
+            inst.config.instance.loader.clone().unwrap_or_default(),
+            inst.config.instance.minecraft_version.clone(),
+        )
     };
+
+    if version_key(&minecraft_version) < version_key(&old_mc) {
+        send_fail(format!("Minecraft can't be downgraded ({} → {}): worlds don't load in older versions.", old_mc, minecraft_version));
+        return;
+    }
+
+    // A Minecraft upgrade converts the world and can't be undone
+    let mc_changed = minecraft_version != old_mc;
+    if mc_changed {
+        send_log(format!("Minecraft {} → {} can't be undone — backing up first…", old_mc, minecraft_version));
+        match crate::backup::do_create_backup(&state, &instance_id).await {
+            Ok(info) => send_log(format!("Backup saved: {}", info.filename)),
+            Err(e) => { send_fail(format!("Backup failed, update cancelled: {}", e)); return; }
+        }
+    }
 
     let id_clone = instance_id.clone();
     let make_log: Arc<dyn Fn(String) -> WsEvent + Send + Sync + 'static> =
         Arc::new(move |msg| WsEvent::UpdateLog { instance_id: id_clone.clone(), message: msg });
 
-    send_log(format!("Updating NeoForge to {}…", neoforge_version));
-
-    match download_and_run_installer(&state, &neoforge_version, &server_path, make_log).await {
-        Err(e) => { send_fail(e); return; }
-        Ok(()) => {}
+    send_log(format!("Installing {} {}…", loader_name(&loader), loader_version));
+    if let Err(e) = run_loader_installer(&state, &loader, &minecraft_version, &loader_version, &server_path, make_log).await {
+        send_fail(e);
+        return;
     }
 
-    // Derive new MC version from NeoForge version string
-    let mc_version = neoforge_to_mc(&neoforge_version);
+    // Newer Minecraft versions can need a newer Java
+    let new_java = if crate::java::recommended_java(&minecraft_version) != crate::java::recommended_java(&old_mc) {
+        Some(crate::java::pick_for_minecraft(&minecraft_version, |msg| send_log(msg.to_string())).await)
+    } else {
+        None
+    };
 
     // Update in-memory state and msm.toml
     {
         let mut instances = state.instances.write().await;
         if let Some(inst) = instances.get_mut(&instance_id) {
-            inst.config.instance.minecraft_version = mc_version.clone();
-            inst.config.instance.loader_version = Some(neoforge_version.clone());
+            inst.config.instance.minecraft_version = minecraft_version.clone();
+            inst.config.instance.loader_version = Some(loader_version.clone());
+            if let Some(java_path) = new_java {
+                inst.config.server.java_path = java_path;
+            }
 
             if let Ok(toml_str) = toml::to_string_pretty(&inst.config) {
                 let toml_path = instance_dir.join("msm.toml");
@@ -322,10 +364,11 @@ pub async fn update_server_version(
         }
     }
 
-    send_log(format!("Updated to NeoForge {} (MC {}).", neoforge_version, mc_version));
+    send_log(format!("Updated to {} {} (MC {}).", loader_name(&loader), loader_version, minecraft_version));
     let _ = state.log_tx.send(WsEvent::UpdateDone {
         instance_id,
-        minecraft_version: mc_version,
+        minecraft_version,
+        loader_version,
     });
 }
 

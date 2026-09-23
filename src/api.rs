@@ -697,7 +697,8 @@ pub async fn update_all_datapacks(
 
 #[derive(Deserialize)]
 pub struct UpdateVersionRequest {
-    pub neoforge_version: String,
+    pub minecraft_version: String,
+    pub loader_version: String,
 }
 
 pub async fn update_server_version(
@@ -705,14 +706,14 @@ pub async fn update_server_version(
     Path(id): Path<String>,
     Json(req): Json<UpdateVersionRequest>,
 ) -> ApiResult<StatusCode> {
-    if req.neoforge_version.trim().is_empty() {
-        return Err(err(StatusCode::BAD_REQUEST, "neoforge_version is required"));
+    if req.minecraft_version.trim().is_empty() || req.loader_version.trim().is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "minecraft_version and loader_version are required"));
     }
     let exists = state.instances.read().await.contains_key(&id);
     if !exists {
         return Err(err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)));
     }
-    tokio::spawn(setup::update_server_version(state, id, req.neoforge_version));
+    tokio::spawn(setup::update_server_version(state, id, req.minecraft_version, req.loader_version));
     Ok(StatusCode::ACCEPTED)
 }
 

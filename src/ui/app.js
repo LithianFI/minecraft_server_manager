@@ -155,6 +155,7 @@ function handleEvent(ev) {
       const inst = instances.get(ev.instance_id)
       if (inst) {
         inst.minecraft_version = ev.minecraft_version
+        inst.loader_version    = ev.loader_version
         updateCard(inst)
         if (detailId === ev.instance_id) refreshDetail(inst)
       }
@@ -1466,9 +1467,48 @@ let _setupLoader     = null
 let _setupMcVer      = null
 let _setupLoaderVer  = null
 let _setupJavaPath   = null
-const _setupVersions = {}  // loader → [{ minecraft, loaders: [...] }], newest first
 
 const LOADER_NAMES = { neoforge: 'NeoForge', forge: 'Forge', fabric: 'Fabric' }
+
+// ─── Loader version lists (shared by Create Server and Update Version) ───────
+const _loaderVersions = {}  // loader → [{ minecraft, loaders: [...] }], newest first
+
+function cachedLoaderVersions(loader) {
+  return _loaderVersions[loader] ?? []
+}
+
+async function fetchLoaderVersions(loader) {
+  if (!_loaderVersions[loader]) {
+    _loaderVersions[loader] = await api('GET', `/api/setup/versions?loader=${loader}`)
+  }
+  return _loaderVersions[loader]
+}
+
+function setSelectLoading(...sels) {
+  for (const sel of sels) { sel.innerHTML = '<option value="">Loading…</option>'; sel.disabled = true }
+}
+
+function fillSelect(sel, values) {
+  sel.innerHTML = values.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('')
+  sel.disabled = false
+}
+
+// Fills a loader-version dropdown, preselecting the newest non-beta build.
+function fillLoaderVersionSelect(sel, versions) {
+  fillSelect(sel, versions)
+  const stable = versions.find(v => !v.includes('beta'))
+  if (stable) sel.value = stable
+}
+
+// Numeric comparison of Minecraft versions ("1.20.4" < "1.21" < "26.1").
+function compareMcVersions(a, b) {
+  const pa = a.split('.').map(Number), pb = b.split('.').map(Number)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (d) return d
+  }
+  return 0
+}
 
 function openSetupModal() {
   document.getElementById('setup-form').reset()
@@ -1495,40 +1535,31 @@ async function loadSetupVersions() {
   document.getElementById('setup-loader-ver-label').textContent = `${LOADER_NAMES[loader]} Version`
   errorEl.classList.add('hidden')
 
-  if (!_setupVersions[loader]) {
-    mcSel.innerHTML  = '<option value="">Loading…</option>'
-    verSel.innerHTML = '<option value="">Loading…</option>'
-    mcSel.disabled = verSel.disabled = true
-    try {
-      _setupVersions[loader] = await api('GET', `/api/setup/versions?loader=${loader}`)
-    } catch (err) {
-      mcSel.innerHTML = verSel.innerHTML = ''
-      errorEl.textContent = `Failed to load ${LOADER_NAMES[loader]} versions: ${err.message}`
-      errorEl.classList.remove('hidden')
-      return
-    }
-    // The user may have switched loader while this was loading
-    if (document.getElementById('setup-loader').value !== loader) return
+  setSelectLoading(mcSel, verSel)
+  let entries
+  try {
+    entries = await fetchLoaderVersions(loader)
+  } catch (err) {
+    mcSel.innerHTML = verSel.innerHTML = ''
+    errorEl.textContent = `Failed to load ${LOADER_NAMES[loader]} versions: ${err.message}`
+    errorEl.classList.remove('hidden')
+    return
   }
+  // The user may have switched loader while this was loading
+  if (document.getElementById('setup-loader').value !== loader) return
 
-  const entries = _setupVersions[loader]
-  mcSel.innerHTML = entries.map(e => `<option value="${esc(e.minecraft)}">${esc(e.minecraft)}</option>`).join('')
+  fillSelect(mcSel, entries.map(e => e.minecraft))
   // Default to the newest Minecraft version that has a non-beta loader build
   const preferred = entries.find(e => e.loaders.some(v => !v.includes('beta'))) ?? entries[0]
   if (preferred) mcSel.value = preferred.minecraft
-  mcSel.disabled = verSel.disabled = false
   renderSetupLoaderVersions()
 }
 
 function renderSetupLoaderVersions() {
   const loader = document.getElementById('setup-loader').value
   const mc     = document.getElementById('setup-mc-ver').value
-  const verSel = document.getElementById('setup-loader-ver')
-  const entry  = (_setupVersions[loader] ?? []).find(e => e.minecraft === mc)
-  const vers   = entry?.loaders ?? []
-  verSel.innerHTML = vers.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('')
-  const stable = vers.find(v => !v.includes('beta'))
-  if (stable) verSel.value = stable
+  const entry  = cachedLoaderVersions(loader).find(e => e.minecraft === mc)
+  fillLoaderVersionSelect(document.getElementById('setup-loader-ver'), entry?.loaders ?? [])
 }
 
 function updateSetupDirHint() {
@@ -1544,13 +1575,6 @@ function closeSetupModal() {
 
 function setupBackdropClose(e) {
   if (e.target === e.currentTarget) closeSetupModal()
-}
-
-function neoForgeToMcVersion(nfVer) {
-  const parts = nfVer.split('.')
-  if (parts.length < 2 || isNaN(parts[0])) return ''
-  const minor = parseInt(parts[1])
-  return minor === 0 ? `1.${parts[0]}` : `1.${parts[0]}.${parts[1]}`
 }
 
 async function submitSetup(e) {
@@ -2543,12 +2567,13 @@ function showSettingsMsg(elId, text, type) {
 }
 
 // ─── Update version wizard ────────────────────────────────────────────────────
-function openUpdateModal() {
+async function openUpdateModal() {
   if (!detailId) return
-  const inst = instances.get(detailId)
+  const id   = detailId
+  const inst = instances.get(id)
   document.getElementById('update-form').reset()
   document.getElementById('update-error').classList.add('hidden')
-  document.getElementById('update-mc-preview').textContent = ''
+  document.getElementById('update-mc-note').classList.add('hidden')
   document.getElementById('update-step-1').classList.remove('hidden')
   document.getElementById('update-step-2').classList.add('hidden')
   document.getElementById('update-log-output').innerHTML = ''
@@ -2556,9 +2581,51 @@ function openUpdateModal() {
   document.getElementById('btn-update-close').classList.add('hidden')
   document.getElementById('btn-update-submit').disabled = false
   document.getElementById('btn-update-submit').textContent = 'Download & Install'
-  const verEl = document.getElementById('update-current-ver')
-  verEl.textContent = inst ? `Current: MC ${inst.minecraft_version}` : ''
+  const loader = inst?.loader
+  const name   = LOADER_NAMES[loader] ?? loader ?? 'Unknown loader'
+  document.getElementById('update-current-ver').textContent =
+    inst ? `Current: ${name} ${inst.loader_version ?? ''} · MC ${inst.minecraft_version}` : ''
+  document.getElementById('update-loader-ver-label').textContent = `New ${name} Version`
   document.getElementById('update-modal-backdrop').classList.remove('hidden')
+
+  const mcSel  = document.getElementById('update-mc-ver')
+  const verSel = document.getElementById('update-loader-ver')
+  const btn    = document.getElementById('btn-update-submit')
+  const showError = (msg) => {
+    mcSel.innerHTML = verSel.innerHTML = ''
+    btn.disabled = true
+    const errorEl = document.getElementById('update-error')
+    errorEl.textContent = msg
+    errorEl.classList.remove('hidden')
+  }
+  if (!inst || !LOADER_NAMES[loader]) {
+    showError('Version updates are available for NeoForge, Forge and Fabric servers.')
+    return
+  }
+
+  setSelectLoading(mcSel, verSel)
+  let entries
+  try {
+    entries = await fetchLoaderVersions(loader)
+  } catch (err) {
+    showError(`Failed to load ${name} versions: ${err.message}`)
+    return
+  }
+  if (detailId !== id) return
+
+  // Worlds can't be opened by older Minecraft versions, so only offer the current one and newer
+  const choices = entries.filter(e => compareMcVersions(e.minecraft, inst.minecraft_version) >= 0)
+  fillSelect(mcSel, choices.map(e => e.minecraft))
+  if (choices.some(e => e.minecraft === inst.minecraft_version)) mcSel.value = inst.minecraft_version
+  renderUpdateLoaderVersions()
+}
+
+function renderUpdateLoaderVersions() {
+  const inst  = instances.get(detailId)
+  const mc    = document.getElementById('update-mc-ver').value
+  const entry = cachedLoaderVersions(inst?.loader).find(e => e.minecraft === mc)
+  fillLoaderVersionSelect(document.getElementById('update-loader-ver'), entry?.loaders ?? [])
+  document.getElementById('update-mc-note').classList.toggle('hidden', !inst || mc === inst.minecraft_version)
 }
 
 function closeUpdateModal() {
@@ -2567,12 +2634,6 @@ function closeUpdateModal() {
 
 function updateBackdropClose(e) {
   if (e.target === e.currentTarget) closeUpdateModal()
-}
-
-function updateNfPreview() {
-  const ver = document.getElementById('update-nf-ver').value.trim()
-  const mc  = neoForgeToMcVersion(ver)
-  document.getElementById('update-mc-preview').textContent = mc ? `MC ${mc}` : ''
 }
 
 async function submitUpdate(e) {
@@ -2584,14 +2645,15 @@ async function submitUpdate(e) {
   btn.textContent = 'Installing…'
   errorEl.classList.add('hidden')
 
-  const nfVer = document.getElementById('update-nf-ver').value.trim()
+  const minecraft_version = document.getElementById('update-mc-ver').value
+  const loader_version    = document.getElementById('update-loader-ver').value
 
   document.getElementById('update-step-1').classList.add('hidden')
   document.getElementById('update-step-2').classList.remove('hidden')
   document.getElementById('update-progress-msg').textContent = 'Downloading & installing…'
 
   try {
-    await api('POST', `/api/instances/${detailId}/update-version`, { neoforge_version: nfVer })
+    await api('POST', `/api/instances/${detailId}/update-version`, { minecraft_version, loader_version })
   } catch (err) {
     document.getElementById('update-step-1').classList.remove('hidden')
     document.getElementById('update-step-2').classList.add('hidden')

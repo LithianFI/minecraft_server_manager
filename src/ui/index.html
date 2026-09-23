@@ -526,13 +526,21 @@
       <form id="update-form" onsubmit="submitUpdate(event)">
         <div class="setup-form-body">
           <div class="update-current-ver" id="update-current-ver"></div>
-          <div class="field">
-            <label for="update-nf-ver">New NeoForge Version</label>
-            <input id="update-nf-ver" type="text" placeholder="21.1.172" required oninput="updateNfPreview()">
-            <span id="update-mc-preview" class="field-hint"></span>
+          <div class="field-row">
+            <div class="field">
+              <label for="update-mc-ver">Minecraft Version</label>
+              <select id="update-mc-ver" class="prop-select" required onchange="renderUpdateLoaderVersions()"></select>
+            </div>
+            <div class="field">
+              <label for="update-loader-ver" id="update-loader-ver-label">New Loader Version</label>
+              <select id="update-loader-ver" class="prop-select" required></select>
+            </div>
+          </div>
+          <div id="update-mc-note" class="update-warning hidden">
+            ⚠ Upgrading Minecraft converts the world and can't be undone. MSM takes a full backup before installing. Every mod must also support the new version.
           </div>
           <div class="update-warning">
-            ⚠ The server must be stopped before updating. Mods may require a matching NeoForge version — verify compatibility before starting.
+            ⚠ The server must be stopped before updating. Mods may require a matching loader version — verify compatibility before starting.
           </div>
           <div id="update-error" class="error-msg hidden"></div>
         </div>
