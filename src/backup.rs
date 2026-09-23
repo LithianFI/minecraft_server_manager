@@ -76,7 +76,7 @@ pub async fn trigger_backup(state: Arc<AppState>, instance_id: String) {
 }
 
 pub async fn do_create_backup(state: &AppState, instance_id: &str) -> Result<BackupInfo, String> {
-    let (server_path, world_only, keep_count) = {
+    let (server_path, world_only, keep_count, running) = {
         let instances = state.instances.read().await;
         let inst = instances
             .get(instance_id)
@@ -86,6 +86,7 @@ pub async fn do_create_backup(state: &AppState, instance_id: &str) -> Result<Bac
             inst.config.server.path.clone(),
             backup.as_ref().map(|b| b.world_only).unwrap_or(false),
             backup.as_ref().map(|b| b.keep_count).unwrap_or(10),
+            inst.status == InstanceStatus::Running,
         )
     };
 
@@ -99,12 +100,24 @@ pub async fn do_create_backup(state: &AppState, instance_id: &str) -> Result<Bac
     let output_clone = output_path.clone();
     let server_clone = server_path.clone();
 
-    let size_bytes = tokio::task::spawn_blocking(move || {
+    // A running server keeps writing chunks: pause saving and flush everything
+    // to disk first so the archive holds a consistent world.
+    if running {
+        pause_saving(state, instance_id).await?;
+    }
+
+    let archived = tokio::task::spawn_blocking(move || {
         create_tar_zst(&server_clone, &output_clone, world_only)
     })
-    .await
-    .map_err(|e| format!("Backup task panicked: {}", e))?
-    .map_err(|e| format!("Failed to create archive: {}", e))?;
+    .await;
+
+    if running {
+        send_to_server(state, instance_id, "save-on").await;
+    }
+
+    let size_bytes = archived
+        .map_err(|e| format!("Backup task panicked: {}", e))?
+        .map_err(|e| format!("Failed to create archive: {}", e))?;
 
     apply_retention(instance_id, keep_count);
 
@@ -118,6 +131,43 @@ pub async fn do_create_backup(state: &AppState, instance_id: &str) -> Result<Bac
     });
 
     Ok(info)
+}
+
+async fn send_to_server(state: &AppState, instance_id: &str, command: &str) -> bool {
+    let processes = state.processes.lock().await;
+    processes
+        .get(instance_id)
+        .is_some_and(|h| h.stdin_tx.send(command.to_string()).is_ok())
+}
+
+/// Sends `save-off` + `save-all flush` and waits for the server to confirm the save.
+async fn pause_saving(state: &AppState, instance_id: &str) -> Result<(), String> {
+    // Subscribe before sending so the confirmation line can't be missed
+    let mut rx = state.log_tx.subscribe();
+
+    if !send_to_server(state, instance_id, "save-off").await
+        || !send_to_server(state, instance_id, "save-all flush").await
+    {
+        return Err("Server stopped before the backup could start".to_string());
+    }
+
+    let confirmed = tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        loop {
+            match rx.recv().await {
+                Ok(WsEvent::LogLine { instance_id: id, line, .. })
+                    if id == instance_id && line.contains("Saved the game") => return true,
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(_) => return false,
+            }
+        }
+    })
+    .await;
+
+    if confirmed != Ok(true) {
+        send_to_server(state, instance_id, "save-on").await;
+        return Err("Server did not confirm the world save (save-all flush) in time".to_string());
+    }
+    Ok(())
 }
 
 fn create_tar_zst(source: &Path, output: &Path, world_only: bool) -> Result<u64, String> {
