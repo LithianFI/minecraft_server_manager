@@ -153,11 +153,16 @@ pub async fn run_tps_task(state: Arc<AppState>, instance_id: String) {
                     .and_then(|i| i.config.instance.loader.clone())
                     .unwrap_or_default()
             };
-            // forge tps is only available on Forge/NeoForge
-            if loader == "neoforge" || loader == "forge" {
+            // The TPS command is only available on Forge ("forge tps") and NeoForge ("neoforge tps")
+            let tps_cmd = match loader.as_str() {
+                "neoforge" => Some("neoforge tps"),
+                "forge"    => Some("forge tps"),
+                _          => None,
+            };
+            if let Some(cmd) = tps_cmd {
                 let processes = state.processes.lock().await;
                 if let Some(handle) = processes.get(&instance_id) {
-                    let _ = handle.stdin_tx.send("forge tps".to_string());
+                    let _ = handle.stdin_tx.send(cmd.to_string());
                 }
             }
         }
@@ -168,11 +173,56 @@ pub async fn run_tps_task(state: Arc<AppState>, instance_id: String) {
 
 // ── TPS line parser (called from instance.rs log processing) ─────────────────
 
+/// Parses the "Overall" line of the TPS command output (per-dimension lines are ignored):
+///   Forge, NeoForge 1.20.x: "Overall: Mean tick time: 0.519 ms. Mean TPS: 20.000"
+///   NeoForge 1.21+:         "Overall: 20.000 TPS (0.519 ms/tick)"
+/// The number follows the JVM locale, so "20,000" is accepted too.
 pub fn parse_tps(line: &str) -> Option<f32> {
-    let pos = line.find("TPS: ")?;
-    let rest = &line[pos + 5..];
-    let end = rest
-        .find(|c: char| !c.is_ascii_digit() && c != '.')
-        .unwrap_or(rest.len());
-    rest[..end].parse().ok()
+    let rest = &line[line.find("Overall: ")? + "Overall: ".len()..];
+    let (num, neoforge_style) = match rest.find("Mean TPS: ") {
+        Some(pos) => (&rest[pos + "Mean TPS: ".len()..], false),
+        None => (rest, true),
+    };
+    let end = num
+        .find(|c: char| !c.is_ascii_digit() && c != '.' && c != ',')
+        .unwrap_or(num.len());
+    if neoforge_style && !num[end..].starts_with(" TPS") {
+        return None;
+    }
+    num[..end].replace(',', ".").parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_tps;
+
+    #[test]
+    fn parses_forge_overall() {
+        let line = "[12:00:00] [Server thread/INFO] [minecraft/MinecraftServer]: Overall: Mean tick time: 0.519 ms. Mean TPS: 20.000";
+        assert_eq!(parse_tps(line), Some(20.0));
+    }
+
+    #[test]
+    fn parses_neoforge_overall() {
+        let line = "[12:00:00] [Server thread/INFO] [minecraft/MinecraftServer]: Overall: 18.532 TPS (53.960 ms/tick)";
+        assert_eq!(parse_tps(line), Some(18.532));
+    }
+
+    #[test]
+    fn parses_comma_decimal() {
+        assert_eq!(parse_tps("Overall: 19,750 TPS (50,633 ms/tick)"), Some(19.75));
+        assert_eq!(parse_tps("Overall: Mean tick time: 0,519 ms. Mean TPS: 20,000"), Some(20.0));
+    }
+
+    #[test]
+    fn ignores_dimension_lines() {
+        assert_eq!(parse_tps("Overworld: 20.000 TPS (0.519 ms/tick)"), None);
+        assert_eq!(parse_tps("Dim minecraft:overworld (minecraft:overworld): Mean tick time: 0.519 ms. Mean TPS: 20.000"), None);
+    }
+
+    #[test]
+    fn ignores_unrelated_lines() {
+        assert_eq!(parse_tps("<Steve> Overall: this server is great"), None);
+        assert_eq!(parse_tps("Unknown or incomplete command, see below for error"), None);
+    }
 }
