@@ -158,7 +158,7 @@ Then open `http://localhost:8080`.
 - **Data:** everything lives in the `msm-data` volume, mounted at `/data`. MSM's data directory is `/data/msm` (config, instances, backups). When creating a server with the setup wizard, use a directory under `/data`, e.g. `/data/msm/servers/survival`.
 - **Config:** put `config.toml` (Discord bot, web port) at `/data/msm/config.toml`, e.g. `docker compose cp config.toml msm:/data/msm/config.toml` then restart.
 - **Ports:** `8080` is the dashboard; each Minecraft instance's port must also be published. Add a line under `ports:` for every port your instances use.
-- **Stopping:** on `docker stop` / `docker compose down`, MSM stops any running server with `stop` so the world is saved. The compose file allows 2 minutes for this (`stop_grace_period`); with plain `docker run`, pass `--stop-timeout 120`.
+- **Stopping:** on `docker stop` / `docker compose down`, MSM stops any running server with `stop` so the world is saved. MSM waits up to 3 minutes for the save; the compose file allows 3½ minutes (`stop_grace_period`), and with plain `docker run` pass `--stop-timeout 210`.
 - **Bind mount instead of a volume:** the container runs as UID 1000, so the host directory must be writable by it: `mkdir data && sudo chown 1000:1000 data`, then use `./data:/data`.
 
 ## Homepage integration

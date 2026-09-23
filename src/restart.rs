@@ -130,23 +130,12 @@ async fn do_restart(state: &Arc<AppState>, instance_id: &str) {
         return;
     }
 
-    let stopped = tokio::time::timeout(Duration::from_secs(90), async {
-        loop {
-            let done = state
-                .instances
-                .read()
-                .await
-                .get(instance_id)
-                .map(|i| i.status == InstanceStatus::Stopped)
-                .unwrap_or(true);
-            if done { break; }
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
-    })
-    .await;
-
-    if stopped.is_err() {
-        tracing::warn!("Scheduled restart: '{}' did not stop within 90s", instance_id);
+    if !instance::wait_until_stopped(state, instance_id).await {
+        tracing::warn!(
+            "Scheduled restart: '{}' did not stop within {}s",
+            instance_id,
+            instance::STOP_TIMEOUT.as_secs()
+        );
         return;
     }
 

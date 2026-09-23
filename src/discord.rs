@@ -250,19 +250,10 @@ async fn restart(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     }
 
-    // Poll until stopped (max 60s)
-    let _ = tokio::time::timeout(Duration::from_secs(60), async {
-        loop {
-            let done = {
-                let instances = state.instances.read().await;
-                instances.get(&id)
-                    .map(|i| matches!(i.status, InstanceStatus::Stopped | InstanceStatus::Crashed))
-                    .unwrap_or(true)
-            };
-            if done { break; }
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
-    }).await;
+    if !instance::wait_until_stopped(&state, &id).await {
+        ctx.say(format!("❌ **{}** did not stop in time; not restarting.", display)).await?;
+        return Ok(());
+    }
 
     match instance::start_instance(state, &id).await {
         Ok(_)  => ctx.say(format!("🔄 **{}** is restarting.", display)).await?,

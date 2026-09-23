@@ -8,10 +8,33 @@ use tokio::sync::mpsc;
 use crate::metrics;
 use crate::state::{AppState, DeathInfo, InstanceStatus, LogLine, ProcessHandle, WsEvent};
 
+/// How long to wait for a server to save its world and exit after `stop`.
+pub const STOP_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Waits until the instance is no longer starting, running or stopping.
+/// Returns false if it is still up after [`STOP_TIMEOUT`].
+pub async fn wait_until_stopped(state: &AppState, instance_id: &str) -> bool {
+    tokio::time::timeout(STOP_TIMEOUT, async {
+        while state.instances.read().await.get(instance_id).is_some_and(|i| {
+            matches!(i.status, InstanceStatus::Starting | InstanceStatus::Running | InstanceStatus::Stopping)
+        }) {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
 pub async fn start_instance(state: Arc<AppState>, instance_id: &str) -> Result<(), String> {
     {
         let instances = state.instances.read().await;
         for inst in instances.values() {
+            if inst.status == InstanceStatus::Stopping {
+                return Err(format!(
+                    "Instance '{}' is still stopping. Try again once it has stopped.",
+                    inst.config.instance.display_name.as_deref().unwrap_or(&inst.config.instance.name)
+                ));
+            }
             if matches!(inst.status, InstanceStatus::Starting | InstanceStatus::Running) {
                 return Err(format!(
                     "Instance '{}' is already running. Stop it first.",
@@ -569,24 +592,7 @@ pub async fn switch_instance(state: Arc<AppState>, target_id: &str) -> Result<()
 
         stop_instance(state.clone(), &running_id).await?;
 
-        let stop_result = tokio::time::timeout(Duration::from_secs(60), async {
-            loop {
-                {
-                    let instances = state.instances.read().await;
-                    if instances
-                        .get(&running_id)
-                        .map(|i| i.status == InstanceStatus::Stopped)
-                        .unwrap_or(true)
-                    {
-                        break;
-                    }
-                }
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
-        })
-        .await;
-
-        if stop_result.is_err() {
+        if !wait_until_stopped(&state, &running_id).await {
             return Err("Timed out waiting for current instance to stop".to_string());
         }
     }

@@ -201,7 +201,7 @@ async fn shutdown_signal(state: Arc<AppState>) {
         _ = sigterm.recv() => {}
     }
 
-    use state::InstanceStatus::{Running, Starting, Stopping};
+    use state::InstanceStatus::{Running, Starting};
 
     let running: Vec<String> = state.instances.read().await
         .iter()
@@ -217,14 +217,10 @@ async fn shutdown_signal(state: Arc<AppState>) {
         let _ = instance::stop_instance(state.clone(), id).await;
     }
 
-    let stopped = tokio::time::timeout(tokio::time::Duration::from_secs(90), async {
-        while state.instances.read().await.values().any(|i| matches!(i.status, Starting | Running | Stopping)) {
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    for id in &running {
+        if !instance::wait_until_stopped(&state, id).await {
+            tracing::warn!("Timed out waiting for '{}' to stop; exiting anyway", id);
         }
-    })
-    .await;
-    if stopped.is_err() {
-        tracing::warn!("Timed out waiting for server(s) to stop; exiting anyway");
     }
 }
 
