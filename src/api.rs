@@ -828,6 +828,54 @@ pub async fn write_file(
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))
 }
 
+// ── Offline player data ──────────────────────────────────────────────────────
+
+pub async fn list_player_data(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<crate::players::PlayerSummary>>> {
+    let server_path = server_path_of(&state, &id).await?;
+    tokio::task::spawn_blocking(move || crate::players::list(&server_path))
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map(Json)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))
+}
+
+pub async fn read_player_data(
+    State(state): State<Arc<AppState>>,
+    Path((id, uuid)): Path<(String, String)>,
+) -> ApiResult<Json<crate::players::PlayerData>> {
+    let server_path = server_path_of(&state, &id).await?;
+    tokio::task::spawn_blocking(move || crate::players::read(&server_path, &uuid))
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map(Json)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))
+}
+
+pub async fn move_player_to_spawn(
+    State(state): State<Arc<AppState>>,
+    Path((id, uuid)): Path<(String, String)>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let server_path = {
+        let instances = state.instances.read().await;
+        let inst = instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+        // A running server keeps players in memory and would overwrite the change
+        if !matches!(inst.status, InstanceStatus::Stopped | InstanceStatus::Crashed) {
+            return Err(err(StatusCode::CONFLICT, "Stop the server before moving players"));
+        }
+        inst.config.server.path.clone()
+    };
+    tokio::task::spawn_blocking(move || crate::players::move_to_spawn(&server_path, &uuid))
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map(|pos| Json(serde_json::json!({ "pos": pos })))
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))
+}
+
 // ── Modpack updates ──────────────────────────────────────────────────────────
 
 pub async fn get_modpack_versions(

@@ -82,6 +82,7 @@
     <button class="tab-btn"        data-tab="mods"     onclick="switchTab('mods')">Mods</button>
     <button class="tab-btn"        data-tab="datapacks" onclick="switchTab('datapacks')">Datapacks</button>
     <button class="tab-btn"        data-tab="files"    onclick="switchTab('files')">Files</button>
+    <button class="tab-btn"        data-tab="players"  onclick="switchTab('players')">Players</button>
     <button class="tab-btn"        data-tab="backups"  onclick="switchTab('backups')">Backups</button>
     <button class="tab-btn"        data-tab="stats"    onclick="switchTab('stats')">Stats</button>
     <button class="tab-btn"        data-tab="settings" onclick="switchTab('settings')">Settings</button>
@@ -155,6 +156,14 @@
         <div class="files-hint">Most mods read their config when the server starts — restart the server to apply changes. <kbd>Ctrl</kbd>+<kbd>S</kbd> saves.</div>
       </section>
     </div>
+  </div>
+
+  <div id="tab-players" class="tab-panel hidden">
+    <div class="mods-toolbar">
+      <button class="btn-outline" onclick="loadPlayerData(detailId)">⟳ Refresh</button>
+      <span id="players-msg" class="mods-msg">Saved player data — written when players log out and on autosave.</span>
+    </div>
+    <div id="players-list" class="players-list"></div>
   </div>
 
   <div id="tab-settings" class="tab-panel hidden">
@@ -781,6 +790,26 @@
     <div class="modal-footer">
       <button type="button" class="btn-outline" onclick="closeAddModModal()">Cancel</button>
       <button id="btn-add-mod-submit" class="btn-primary" onclick="submitAddMod()" disabled>Add Mod</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════════════════════ INVENTORY MODAL ══ -->
+<div id="inv-modal-backdrop" class="modal-backdrop hidden" onclick="if (event.target === event.currentTarget) closeInvModal()">
+  <div class="modal modal-wide inv-modal">
+    <div class="modal-header">
+      <h3 id="inv-title">Inventory</h3>
+      <button class="btn-close" onclick="closeInvModal()">✕</button>
+    </div>
+    <div class="setup-form-body">
+      <div id="inv-meta" class="inv-meta"></div>
+      <div class="inv-section-label">Equipment</div>
+      <div id="inv-equipment" class="inv-grid inv-equipment"></div>
+      <div class="inv-section-label">Inventory</div>
+      <div id="inv-main" class="inv-grid"></div>
+      <div id="inv-hotbar" class="inv-grid inv-hotbar"></div>
+      <div class="inv-section-label">Ender Chest</div>
+      <div id="inv-ender" class="inv-grid"></div>
     </div>
   </div>
 </div>

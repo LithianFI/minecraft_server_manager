@@ -15,6 +15,7 @@ A self-hosted Minecraft server manager built in Rust. Runs a local web dashboard
 - Live player list, TPS, and RAM metrics
 - Server properties editor (preserves comments and ordering in `server.properties`)
 - Config file editor for `config/`, `defaultconfigs/`, `kubejs/` and the world's `serverconfig/` (text files only; saves are atomic)
+- Players tab: every player with saved data, their last position, a read-only inventory / ender chest view, and "Move to spawn" for players stuck somewhere (server must be stopped; the old player file is kept as `.msm-bak`)
 - Setup wizard for new instances — pick NeoForge, Forge or Fabric, then choose the Minecraft and loader versions from dropdowns
 
 ### Backups

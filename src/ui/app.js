@@ -502,6 +502,7 @@ function switchTab(name) {
   if (name === 'mods'       && detailId) renderMods()
   if (name === 'datapacks'  && detailId) renderDatapacks()
   if (name === 'files'      && detailId) openFilesTab(detailId)
+  if (name === 'players'    && detailId) loadPlayerData(detailId)
   if (name === 'stats'      && detailId) loadStats(detailId)
   if (name === 'settings' && detailId) { loadSettings(detailId); loadDiskUsage(detailId); loadBackupConfig(detailId); loadAlertsConfig(detailId); loadSchedules(detailId) }
 }
@@ -636,6 +637,124 @@ document.addEventListener('keydown', (e) => {
   }
 })
 window.addEventListener('beforeunload', (e) => { if (filesDirty()) e.preventDefault() })
+
+// ─── Players (saved player data) ──────────────────────────────────────────────
+function prettyId(id) {
+  const [ns, path] = id.includes(':') ? id.split(':') : ['minecraft', id]
+  const name = path.split(/[_/]/).filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join(' ')
+  return { name, mod: ns === 'minecraft' ? null : ns }
+}
+
+function prettyDimension(dim) {
+  if (!dim) return 'Unknown'
+  const known = { 'minecraft:overworld': 'Overworld', 'minecraft:the_nether': 'The Nether', 'minecraft:the_end': 'The End' }
+  if (known[dim]) return known[dim]
+  const { name, mod } = prettyId(dim)
+  return mod ? `${name} (${mod})` : name
+}
+
+async function loadPlayerData(id) {
+  const el = document.getElementById('players-list')
+  el.innerHTML = '<div class="placeholder">Loading…</div>'
+  let players
+  try {
+    players = await api('GET', `/api/instances/${id}/playerdata`)
+  } catch (e) {
+    el.innerHTML = `<div class="mods-empty"><p>${esc(e.message)}</p></div>`
+    return
+  }
+  if (detailId !== id) return
+  if (!players.length) {
+    el.innerHTML = '<div class="mods-empty"><p>No saved player data yet.</p><p class="mods-empty-hint">Players appear here after they have joined the server.</p></div>'
+    return
+  }
+  const running = ['running', 'starting', 'stopping'].includes(instances.get(id)?.status)
+  el.innerHTML = players.map((p, i) => {
+    const name = p.name ?? p.uuid
+    const pos = p.pos ? p.pos.map(c => Math.round(c)).join(', ') : '—'
+    return `<div class="player-row">
+      <div class="wl-avatar">${esc((p.name ?? '?')[0].toUpperCase())}</div>
+      <div class="player-main">
+        <div class="player-name">${esc(name)}</div>
+        <div class="player-where">${esc(prettyDimension(p.dimension))} <span class="player-pos">${esc(pos)}</span></div>
+      </div>
+      <div class="player-saved" title="Player file last written">${esc(new Date(p.last_saved * 1000).toLocaleString())}</div>
+      <div class="mod-actions">
+        <button class="btn-outline btn-mod-action" data-i="${i}" data-act="inv">Inventory</button>
+        <button class="btn-outline btn-mod-action" data-i="${i}" data-act="spawn" ${running ? 'disabled title="Stop the server first — a running server would overwrite the change"' : ''}>Move to spawn</button>
+      </div>
+    </div>`
+  }).join('')
+  el.querySelectorAll('button[data-act]').forEach(b => {
+    const p = players[Number(b.dataset.i)]
+    b.onclick = () => b.dataset.act === 'inv' ? openInventory(p.uuid) : movePlayerToSpawn(p, b)
+  })
+}
+
+async function movePlayerToSpawn(p, btn) {
+  const name = p.name ?? p.uuid
+  if (!confirm(`Move ${name} to the world spawn in the Overworld?\n\nUse this for players stuck somewhere they can't escape. The previous player file is kept as ${p.uuid}.dat.msm-bak.`)) return
+  btn.disabled = true
+  const msg = document.getElementById('players-msg')
+  try {
+    const res = await api('POST', `/api/instances/${detailId}/playerdata/${p.uuid}/move-to-spawn`)
+    msg.textContent = `Moved ${name} to ${res.pos.map(c => Math.round(c)).join(', ')} in the Overworld.`
+    msg.className = 'mods-msg success'
+    loadPlayerData(detailId)
+  } catch (e) {
+    btn.disabled = false
+    msg.textContent = e.message
+    msg.className = 'mods-msg error'
+  }
+}
+
+function invSlotHTML(item, selected = false) {
+  if (!item) return `<div class="inv-slot empty ${selected ? 'selected' : ''}"></div>`
+  const { name, mod } = prettyId(item.id)
+  const label = item.custom_name || name
+  const tip = [item.custom_name ? `“${item.custom_name}”` : null, item.id, item.count > 1 ? `×${item.count}` : null, item.enchanted ? 'enchanted' : null]
+    .filter(Boolean).join(' · ')
+  return `<div class="inv-slot ${item.enchanted ? 'enchanted' : ''} ${item.custom_name ? 'named' : ''} ${selected ? 'selected' : ''}" title="${esc(tip)}">
+    <span class="inv-name">${esc(label)}</span>
+    ${mod ? `<span class="inv-mod">${esc(mod)}</span>` : ''}
+    ${item.count > 1 ? `<span class="inv-count">${item.count}</span>` : ''}
+  </div>`
+}
+
+async function openInventory(uuid) {
+  const id = detailId
+  let p
+  try {
+    p = await api('GET', `/api/instances/${id}/playerdata/${uuid}`)
+  } catch (e) {
+    const msg = document.getElementById('players-msg')
+    msg.textContent = e.message
+    msg.className = 'mods-msg error'
+    return
+  }
+  const bySlot = (items) => new Map(items.map(it => [it.slot, it]))
+  const inv = bySlot(p.inventory), ender = bySlot(p.ender_chest)
+  const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i)
+
+  document.getElementById('inv-title').textContent = `${p.name ?? p.uuid} — Inventory`
+  const hearts = p.health != null ? `${(p.health / 2).toFixed(1)} ♥` : null
+  document.getElementById('inv-meta').innerHTML = [
+    `<span>${esc(prettyDimension(p.dimension))}${p.pos ? ` · ${esc(p.pos.map(c => Math.round(c)).join(', '))}` : ''}</span>`,
+    hearts && `<span>${esc(hearts)}</span>`,
+    p.xp_level != null && `<span>Level ${p.xp_level}</span>`,
+    `<span class="inv-meta-note">as of ${esc(new Date(p.last_saved * 1000).toLocaleString())}</span>`,
+  ].filter(Boolean).join('')
+  // Helmet, chestplate, leggings, boots, then off-hand
+  document.getElementById('inv-equipment').innerHTML = [103, 102, 101, 100, -106].map(s => invSlotHTML(inv.get(s))).join('')
+  document.getElementById('inv-main').innerHTML = range(9, 35).map(s => invSlotHTML(inv.get(s))).join('')
+  document.getElementById('inv-hotbar').innerHTML = range(0, 8).map(s => invSlotHTML(inv.get(s), s === p.selected_slot)).join('')
+  document.getElementById('inv-ender').innerHTML = range(0, 26).map(s => invSlotHTML(ender.get(s))).join('')
+  document.getElementById('inv-modal-backdrop').classList.remove('hidden')
+}
+
+function closeInvModal() {
+  document.getElementById('inv-modal-backdrop').classList.add('hidden')
+}
 
 // ─── Log view ─────────────────────────────────────────────────────────────────
 function linePassesFilter(line) {

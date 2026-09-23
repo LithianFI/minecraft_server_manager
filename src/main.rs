@@ -11,6 +11,7 @@ mod instance;
 mod java;
 mod metrics;
 mod metrics_db;
+mod players;
 mod datapack_mgr;
 mod mod_mgr;
 mod modpack;
@@ -143,6 +144,9 @@ async fn main() {
         .route("/api/instances/{id}/update-version", post(api::update_server_version))
         .route("/api/instances/{id}/crash-report", get(api::get_crash_report))
         .route("/api/instances/{id}/files", get(api::list_files))
+        .route("/api/instances/{id}/playerdata", get(api::list_player_data))
+        .route("/api/instances/{id}/playerdata/{uuid}", get(api::read_player_data))
+        .route("/api/instances/{id}/playerdata/{uuid}/move-to-spawn", post(api::move_player_to_spawn))
         .route("/api/instances/{id}/files/content", get(api::read_file).put(api::write_file))
         .route("/api/instances/{id}/modpack/versions", get(api::get_modpack_versions))
         .route("/api/instances/{id}/modpack/update", post(api::update_modpack))
