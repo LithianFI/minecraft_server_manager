@@ -5,6 +5,7 @@ mod ban;
 mod config;
 mod crash;
 mod discord;
+mod distribution;
 mod files;
 mod ftb;
 mod instance;
@@ -91,6 +92,7 @@ async fn main() {
         log_tx,
         global_config,
         sessions: Default::default(),
+        client_packs: Default::default(),
         discord_notify,
         http_client: reqwest::Client::new(),
         metrics_db,
@@ -103,7 +105,7 @@ async fn main() {
         .and_then(|w| w.port)
         .unwrap_or(8080);
 
-    let app = Router::new()
+    let app = pack_routes(Router::new())
         // Static assets
         .route("/", get(|| async { Html(HTML) }))
         .route("/style.css", get(serve_css))
@@ -144,6 +146,8 @@ async fn main() {
         .route("/api/instances/{id}/update-version", post(api::update_server_version))
         .route("/api/instances/{id}/crash-report", get(api::get_crash_report))
         .route("/api/instances/{id}/files", get(api::list_files))
+        .route("/api/instances/{id}/distribution", get(api::get_distribution).post(api::set_distribution))
+        .route("/api/instances/{id}/distribution/mods", post(api::set_distribution_mod))
         .route("/api/instances/{id}/playerdata", get(api::list_player_data))
         .route("/api/instances/{id}/playerdata/{uuid}", get(api::read_player_data))
         .route("/api/instances/{id}/playerdata/{uuid}/move-to-spawn", post(api::move_player_to_spawn))
@@ -181,6 +185,18 @@ async fn main() {
         .with_state(state.clone());
 
     auth::warn_if_open(&state);
+
+    // Optional second port with only the player pages, safe to expose to the internet
+    if let Some(pack_port) = state.global_config.web.as_ref().and_then(|w| w.pack_port) {
+        let pack_app = pack_routes(Router::new()).with_state(state.clone());
+        match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", pack_port)).await {
+            Ok(listener) => {
+                tracing::info!("Player pages on port {}", pack_port);
+                tokio::spawn(async move { let _ = axum::serve(listener, pack_app).await; });
+            }
+            Err(e) => tracing::error!("Couldn't open player port {}: {}", pack_port, e),
+        }
+    }
 
     let addr = format!("0.0.0.0:{}", port);
     tracing::info!("Listening on http://localhost:{}", port);
@@ -252,6 +268,14 @@ async fn shutdown_signal(state: Arc<AppState>) {
             tracing::warn!("Timed out waiting for '{}' to stop; exiting anyway", id);
         }
     }
+}
+
+/// Public player pages: join page, packwiz files and downloads (token-protected).
+fn pack_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
+    router
+        .route("/pack/{token}", get(distribution::pack_redirect))
+        .route("/pack/{token}/", get(distribution::join_page))
+        .route("/pack/{token}/{*rest}", get(distribution::pack_file))
 }
 
 fn start_instance_watcher(state: Arc<AppState>) {

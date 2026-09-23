@@ -1363,6 +1363,44 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   .files-browser { width: auto; max-height: 40%; border-right: none; border-bottom: 1px solid var(--border); }
 }
 
+/* ── Share with players ──────────────────────────────────────────── */
+.share-modal { max-width: 760px; }
+.share-toggle { display: flex; gap: 12px; align-items: flex-start; cursor: pointer; font-weight: 500; }
+.share-toggle .field-hint { display: block; font-weight: 400; margin-top: 2px; }
+.share-toggle input { position: absolute; opacity: 0; pointer-events: none; }
+.share-switch {
+  flex-shrink: 0; width: 38px; height: 22px; margin-top: 1px; border-radius: 11px;
+  background: var(--border-hi); position: relative; transition: background .15s;
+}
+.share-switch::after {
+  content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--text); transition: transform .15s;
+}
+.share-toggle input:checked + .share-switch { background: var(--green); }
+.share-toggle input:checked + .share-switch::after { transform: translateX(16px); }
+.share-toggle input:focus-visible + .share-switch { box-shadow: 0 0 0 3px var(--green-dim); }
+#share-body { display: flex; flex-direction: column; gap: 14px; }
+#share-body.hidden { display: none; }
+.share-link { display: flex; gap: 6px; align-items: center; }
+.share-link code {
+  flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap;
+  font-family: var(--mono); font-size: 12px; padding: 7px 10px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--r); color: var(--text);
+}
+.share-link a { text-decoration: none; font-family: var(--ui); font-weight: 600; letter-spacing: .05em; border-radius: var(--r); }
+.share-summary { font-size: 13px; color: var(--text-dim); }
+.share-summary b { color: var(--text); }
+.share-mods { max-height: 340px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--r); }
+.share-mod { display: flex; gap: 10px; align-items: flex-start; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.share-mod:last-child { border-bottom: none; }
+.share-mod input { margin-top: 3px; accent-color: var(--green); }
+.share-mod.excluded .share-mod-name { color: var(--text-muted); }
+.share-mod-main { flex: 1; min-width: 0; }
+.share-mod-name { font-size: 13px; color: var(--text); }
+.share-mod-reason { font-size: 11px; color: var(--text-muted); }
+.share-reset { background: none; border: none; padding: 0; color: var(--blue); font: inherit; letter-spacing: 0; text-decoration: underline; cursor: pointer; }
+.share-footer { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+
 /* ── Players tab + inventory ─────────────────────────────────────── */
 #tab-players { height: 0; flex: 1; }
 .players-list { flex: 1; overflow-y: auto; }

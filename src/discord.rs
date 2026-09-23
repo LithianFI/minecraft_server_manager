@@ -596,6 +596,17 @@ async fn notify_task(
                         // Crashes are announced by CrashDetected, which carries the details
                         _ => None,
                     },
+                    WsEvent::PlayerModsChanged { instance_id, join_url } if cfg.mods_installed => {
+                        let mut msg = format!(
+                            "🧩 **{}** was updated. Players using the Prism instance get the new mods automatically next time they start the game.",
+                            instance_id
+                        );
+                        match join_url {
+                            Some(url) => msg.push_str(&format!("\nEveryone else: download the new pack from {}", url)),
+                            None => msg.push_str("\nPlayers using a downloaded .mrpack need to download it again from the join page."),
+                        }
+                        Some(msg)
+                    }
                     WsEvent::CrashDetected { instance_id, summary } if cfg.server_crashed => {
                         let mut msg = format!("🔴 **{}** has crashed!", instance_id);
                         for (label, value) in [

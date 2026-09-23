@@ -365,10 +365,11 @@ pub async fn update_server_version(
 
     send_log(format!("Updated to {} {} (MC {}).", loader_name(&loader), loader_version, minecraft_version));
     let _ = state.log_tx.send(WsEvent::UpdateDone {
-        instance_id,
+        instance_id: instance_id.clone(),
         minecraft_version,
         loader_version,
     });
+    crate::distribution::announce_update(&state, &instance_id).await;
 }
 
 fn neoforge_to_mc(nf: &str) -> String {

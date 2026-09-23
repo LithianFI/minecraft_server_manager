@@ -30,6 +30,7 @@ A self-hosted Minecraft server manager built in Rust. Runs a local web dashboard
 - One-click update for individual mods or all at once
 - Add mods from Modrinth (with a warning for client-only mods); disable, re-enable or remove any mod
 - Update an imported Modrinth modpack to a newer version: full backup first, stale pack files removed, your own mods kept
+- [Share the server's mods with players](#sharing-mods-with-players): a join page with a self-updating Prism Launcher instance and a `.mrpack` download
 
 ### Whitelist & Bans
 - Global whitelist synced across all server instances
@@ -110,6 +111,8 @@ Every secret and the port can also be set through environment variables, which o
 | `MSM_WEB_PORT` | `[web] port` |
 | `MSM_WEB_PASSWORD` | `[web] password` |
 | `MSM_API_TOKEN` | `[web] api_token` |
+| `MSM_PUBLIC_URL` | `[web] public_url` |
+| `MSM_PACK_PORT` | `[web] pack_port` |
 | `MSM_DISCORD_TOKEN` | `[discord] token` |
 | `MSM_DISCORD_GUILD_ID` | `[discord] guild_id` |
 | `MSM_DISCORD_CHANNEL_ID` | `[discord] channel_id` |
@@ -178,6 +181,25 @@ warning_secs  = 300
 ```
 
 When started from a terminal, the dashboard opens in your browser automatically. Logs go to stdout.
+
+## Sharing mods with players
+
+On an instance's **Mods** tab, click **Share with players** and turn sharing on. MSM works out what players need and gives you a join page link to send them:
+
+- **What players get:** for Modrinth modpacks, the pack's client files (including client-only mods and configs) minus anything you removed from the server; plus mods you added to the server that Modrinth says are needed on clients. Server-only mods are left out. Jars that aren't on Modrinth are off by default — tick the ones players need. Any automatic choice can be overridden.
+- **Prism Launcher (recommended):** the join page offers a ready-made instance. Players drag it into Prism and press Launch. On every launch, [packwiz-installer](https://packwiz.infra.link/) syncs the mods with the server — new mods are downloaded, removed ones deleted — and moves the instance to a new Minecraft or loader version when the server changes. The server is already in the multiplayer list.
+- **Other launchers:** a `.mrpack` of the current mod list, for the Modrinth App and other launchers. It doesn't update itself; players download it again after changes.
+- **Announcements:** after a modpack or loader update, the Discord bot tells players what to do, with the join link if `public_url` is set.
+
+Mods on Modrinth are downloaded from Modrinth; MSM only serves the mod list, configs and jars that aren't on Modrinth. Anyone with the link can download the mods — **New link** replaces it (players then need to download the Prism instance again).
+
+For players outside your network, MSM must be reachable from the internet. Rather than exposing the dashboard, give the player pages their own port and forward only that:
+
+```toml
+[web]
+pack_port  = 8081                          # serves only /pack/… (join page and downloads)
+public_url = "http://your.public.address:8081"
+```
 
 ## Docker
 

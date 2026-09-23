@@ -201,6 +201,11 @@ pub enum WsEvent {
     CrashCleared {
         instance_id: String,
     },
+    /// An update changed what players need to install
+    PlayerModsChanged {
+        instance_id: String,
+        join_url: Option<String>,
+    },
     ModsInstalled {
         instance_id: String,
         mods: Vec<ModEntry>,
@@ -221,6 +226,8 @@ pub struct AppState {
     pub log_tx: broadcast::Sender<WsEvent>,
     pub global_config: GlobalConfig,
     pub sessions: crate::auth::Sessions,
+    /// Generated player mod packs, per instance (see distribution.rs)
+    pub client_packs: Mutex<HashMap<String, Arc<crate::distribution::GeneratedPack>>>,
     pub discord_notify: Arc<RwLock<DiscordNotifyConfig>>,
     pub http_client: reqwest::Client,
     pub metrics_db: crate::metrics_db::MetricsDb,

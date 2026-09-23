@@ -122,6 +122,7 @@
       <button class="btn-outline" id="btn-check-updates" onclick="doCheckUpdates()" disabled>↑ Check Updates</button>
       <button class="btn-primary" id="btn-update-all" onclick="doUpdateAll()" disabled>Update All</button>
       <button class="btn-outline" id="btn-add-mod" onclick="openAddModModal()">+ Add Mod</button>
+      <button class="btn-outline" id="btn-share-mods" onclick="openShareModal()">⇪ Share with players</button>
       <span id="mods-status-msg" class="mods-msg hidden"></span>
     </div>
     <div id="mod-list"></div>
@@ -790,6 +791,43 @@
     <div class="modal-footer">
       <button type="button" class="btn-outline" onclick="closeAddModModal()">Cancel</button>
       <button id="btn-add-mod-submit" class="btn-primary" onclick="submitAddMod()" disabled>Add Mod</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════ SHARE WITH PLAYERS MODAL ══ -->
+<div id="share-modal-backdrop" class="modal-backdrop hidden" onclick="if (event.target === event.currentTarget) closeShareModal()">
+  <div class="modal modal-wide share-modal">
+    <div class="modal-header">
+      <h3>Share mods with players</h3>
+      <button class="btn-close" onclick="closeShareModal()">✕</button>
+    </div>
+    <div class="setup-form-body">
+      <label class="share-toggle">
+        <input type="checkbox" id="share-enabled" onchange="toggleShare(this.checked)">
+        <span class="share-switch"></span>
+        <span>Let players download this server's mods
+          <span class="field-hint">Players get a join page with a self-updating Prism Launcher instance and a .mrpack download.</span>
+        </span>
+      </label>
+      <div id="share-body" class="hidden">
+        <div class="field">
+          <label>Join page for players</label>
+          <div class="share-link">
+            <code id="share-url"></code>
+            <button type="button" class="btn-outline btn-sm" onclick="copyShareUrl(this)">Copy</button>
+            <a id="share-open" class="btn-outline btn-sm" target="_blank" rel="noopener">Open</a>
+          </div>
+          <span id="share-url-hint" class="field-hint"></span>
+        </div>
+        <div id="share-summary" class="share-summary"></div>
+        <div id="share-mods" class="share-mods"></div>
+        <div class="share-footer">
+          <span class="field-hint">Anyone with the link can download the mods. A new link stops the old one — including in Prism instances players already imported.</span>
+          <button type="button" class="btn-outline btn-sm" onclick="newShareLink()">New link</button>
+        </div>
+      </div>
+      <div id="share-error" class="error-msg hidden"></div>
     </div>
   </div>
 </div>

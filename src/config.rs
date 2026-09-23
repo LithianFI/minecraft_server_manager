@@ -68,6 +68,14 @@ pub struct WebConfig {
     /// Read-only token for GET requests (e.g. Homepage), sent as `Authorization: Bearer <token>`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_token: Option<String>,
+    /// Address players use to reach MSM from the internet, e.g. "https://mc.example.com:8081";
+    /// used for links in Discord messages
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_url: Option<String>,
+    /// Optional second port that serves only the player pages (join page + mod downloads),
+    /// so it can be exposed to the internet without the dashboard
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -79,6 +87,22 @@ pub struct InstanceConfig {
     pub alerts: Option<AlertConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub schedules: Vec<ScheduleEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distribution: Option<DistributionConfig>,
+}
+
+/// Sharing the server's mods with players (packwiz / Prism / .mrpack).
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct DistributionConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Secret part of the player links: /pack/<token>/
+    #[serde(default)]
+    pub token: String,
+    /// Choices that override the automatic include/exclude decision, keyed by Modrinth project
+    /// ID or "file:<jar name>" for mods that aren't on Modrinth
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub mods: std::collections::BTreeMap<String, bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -249,6 +273,10 @@ impl GlobalConfig {
         }
         if let Some(v) = var("MSM_WEB_PASSWORD") { web.password = Some(v); }
         if let Some(v) = var("MSM_API_TOKEN") { web.api_token = Some(v); }
+        if let Some(v) = var("MSM_PUBLIC_URL") { web.public_url = Some(v); }
+        if let Some(port) = number("MSM_PACK_PORT")? {
+            web.pack_port = Some(u16::try_from(port).map_err(|_| format!("MSM_PACK_PORT out of range: {}", port))?);
+        }
 
         let token = var("MSM_DISCORD_TOKEN");
         let guild = number("MSM_DISCORD_GUILD_ID")?;
@@ -407,6 +435,7 @@ fn auto_detect_config(dir: &std::path::Path) -> Option<InstanceConfig> {
         }),
         alerts: None,
         schedules: vec![],
+        distribution: None,
     })
 }
 

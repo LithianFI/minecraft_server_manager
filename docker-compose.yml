@@ -10,6 +10,7 @@ services:
     ports:
       - "8080:8080"     # web dashboard
       - "25565:25565"   # Minecraft — add a line for each other port your instances use
+      # - "8081:8081"   # player pages, if you set pack_port = 8081 (see README → Sharing mods with players)
     volumes:
       - msm-data:/data
     environment:

@@ -98,7 +98,8 @@ pub async fn require_auth(State(state): State<Arc<AppState>>, req: Request, next
     }
 
     let path = req.uri().path();
-    let public = matches!(path, "/login" | "/api/login" | "/style.css");
+    // Player pages are public; their random token is the secret
+    let public = matches!(path, "/login" | "/api/login" | "/style.css") || path.starts_with("/pack/");
     // The API token is read-only: it never authorises changes
     let token_ok = *req.method() == Method::GET && has_api_token(&state, req.headers());
 

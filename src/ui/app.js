@@ -646,6 +646,102 @@ document.addEventListener('keydown', (e) => {
 })
 window.addEventListener('beforeunload', (e) => { if (filesDirty()) e.preventDefault() })
 
+// ─── Share mods with players ──────────────────────────────────────────────────
+let _share = null
+
+async function openShareModal() {
+  if (!detailId) return
+  document.getElementById('share-modal-backdrop').classList.remove('hidden')
+  document.getElementById('share-error').classList.add('hidden')
+  document.getElementById('share-mods').innerHTML = ''
+  await shareRequest('GET', `/api/instances/${detailId}/distribution`)
+}
+
+function closeShareModal() {
+  document.getElementById('share-modal-backdrop').classList.add('hidden')
+}
+
+async function shareRequest(method, path, body) {
+  const id = detailId
+  const errEl = document.getElementById('share-error')
+  errEl.classList.add('hidden')
+  document.getElementById('share-summary').innerHTML = '<span class="field-hint">Working out what players need… (the first time can take a moment)</span>'
+  try {
+    const status = await api(method, path, body)
+    if (detailId === id) renderShare(status)
+  } catch (e) {
+    errEl.textContent = e.message
+    errEl.classList.remove('hidden')
+    document.getElementById('share-summary').innerHTML = ''
+  }
+}
+
+function toggleShare(enabled) {
+  shareRequest('POST', `/api/instances/${detailId}/distribution`, { enabled })
+}
+
+function newShareLink() {
+  if (!confirm('Create a new link?\n\nThe current link stops working, and Prism instances players already imported stop updating until they download the instance again from the new link.')) return
+  shareRequest('POST', `/api/instances/${detailId}/distribution`, { enabled: true, new_link: true })
+}
+
+function setShareMod(key, include) {
+  shareRequest('POST', `/api/instances/${detailId}/distribution/mods`, { key, include })
+}
+
+function shareBaseUrl(s) {
+  if (s.public_url) return s.public_url.replace(/\/$/, '')
+  if (s.pack_port) return `${location.protocol}//${location.hostname}:${s.pack_port}`
+  return location.origin
+}
+
+function copyShareUrl(btn) {
+  navigator.clipboard.writeText(document.getElementById('share-url').textContent)
+    .then(() => { btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = 'Copy' }, 1500) })
+    .catch(() => {})
+}
+
+function renderShare(s) {
+  _share = s
+  document.getElementById('share-enabled').checked = s.enabled
+  document.getElementById('share-body').classList.toggle('hidden', !s.enabled)
+  if (!s.enabled) { document.getElementById('share-summary').innerHTML = ''; return }
+
+  const url = shareBaseUrl(s) + s.join_path
+  document.getElementById('share-url').textContent = url
+  document.getElementById('share-open').href = url
+  document.getElementById('share-url-hint').textContent = s.public_url ? '' :
+    'This link uses the address you opened the dashboard on, so it only works where that address does. For players outside your network, forward a port and set [web] public_url (and pack_port to expose only the player pages).'
+
+  if (s.error) {
+    document.getElementById('share-summary').innerHTML = `<span class="files-error">Couldn't build the mod list: ${esc(s.error)}</span>`
+    return
+  }
+  const set = s.set
+  const included = set.mods.filter(m => m.included).length
+  const loader = set.loader ? `${LOADER_NAMES[set.loader] ?? set.loader} ${set.loader_version ?? ''}` : 'Vanilla'
+  document.getElementById('share-summary').innerHTML =
+    `<b>${included}</b> of ${set.mods.length} mods go to players${set.file_count ? ` · <b>${set.file_count}</b> config files from the modpack` : ''} · MC ${esc(set.minecraft)} · ${esc(loader)}`
+
+  document.getElementById('share-mods').innerHTML = set.mods.map((m, i) => `
+    <div class="share-mod ${m.included ? '' : 'excluded'}">
+      <input type="checkbox" data-i="${i}" ${m.included ? 'checked' : ''} title="${m.included ? 'Sent to players' : 'Not sent to players'}">
+      <div class="share-mod-main">
+        <div class="share-mod-name">${esc(m.name)} <span class="mod-tag">${m.origin === 'pack' ? 'modpack' : 'server'}</span></div>
+        <div class="share-mod-reason">${esc(m.reason)}${m.overridden ? ` · <button class="share-reset" data-reset="${i}">use MSM's choice</button>` : ''}</div>
+      </div>
+    </div>`).join('')
+  document.querySelectorAll('#share-mods input[data-i]').forEach(cb => {
+    cb.onchange = () => {
+      const m = set.mods[Number(cb.dataset.i)]
+      setShareMod(m.key, cb.checked === m.auto ? null : cb.checked)
+    }
+  })
+  document.querySelectorAll('#share-mods [data-reset]').forEach(b => {
+    b.onclick = () => setShareMod(set.mods[Number(b.dataset.reset)].key, null)
+  })
+}
+
 // ─── Players (saved player data) ──────────────────────────────────────────────
 function prettyId(id) {
   const [ns, path] = id.includes(':') ? id.split(':') : ['minecraft', id]

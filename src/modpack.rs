@@ -18,7 +18,7 @@ struct ModrinthVersionFile {
 }
 
 #[derive(Deserialize)]
-struct ModrinthVersion {
+pub(crate) struct ModrinthVersion {
     project_id: String,
     #[serde(default)]
     version_number: String,
@@ -28,29 +28,35 @@ struct ModrinthVersion {
 // ── mrpack manifest ────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
-struct PackIndex {
-    name: String,
-    dependencies: HashMap<String, String>,
-    files: Vec<PackFile>,
+pub(crate) struct PackIndex {
+    pub(crate) name: String,
+    pub(crate) dependencies: HashMap<String, String>,
+    pub(crate) files: Vec<PackFile>,
 }
 
 #[derive(Deserialize)]
-struct PackFile {
-    path: String,
-    hashes: PackHashes,
-    downloads: Vec<String>,
+pub(crate) struct PackFile {
+    pub(crate) path: String,
+    pub(crate) hashes: PackHashes,
+    pub(crate) downloads: Vec<String>,
     #[serde(default)]
-    env: Option<EnvSpec>,
+    pub(crate) env: Option<EnvSpec>,
+    #[serde(default, rename = "fileSize")]
+    pub(crate) file_size: Option<u64>,
 }
 
 #[derive(Deserialize)]
-struct PackHashes {
-    sha512: Option<String>,
+pub(crate) struct PackHashes {
+    pub(crate) sha512: Option<String>,
+    #[serde(default)]
+    pub(crate) sha1: Option<String>,
 }
 
 #[derive(Deserialize)]
-struct EnvSpec {
-    server: Option<String>,
+pub(crate) struct EnvSpec {
+    pub(crate) server: Option<String>,
+    #[serde(default)]
+    pub(crate) client: Option<String>,
 }
 
 // ── Fabric meta ────────────────────────────────────────────────────────────────
@@ -243,6 +249,7 @@ async fn do_import(state: &Arc<AppState>, req: ImportRequest) -> Result<(), Stri
         }),
         alerts: None,
         schedules: vec![],
+        distribution: None,
     };
 
     let toml_str = toml::to_string_pretty(&config)
@@ -321,7 +328,7 @@ pub async fn list_pack_versions(
 }
 
 /// Downloads a pack version's .mrpack and parses its manifest.
-async fn fetch_pack(state: &Arc<AppState>, version_id: &str) -> Result<(ModrinthVersion, Vec<u8>, PackIndex), String> {
+pub(crate) async fn fetch_pack(state: &Arc<AppState>, version_id: &str) -> Result<(ModrinthVersion, Vec<u8>, PackIndex), String> {
     let version: ModrinthVersion = state.http_client
         .get(format!("https://api.modrinth.com/v2/version/{}", version_id))
         .header("User-Agent", "msm/0.1")
@@ -359,10 +366,14 @@ pub async fn update_modpack(
     installed_version_id: Option<String>,
 ) {
     let result = do_update_modpack(&state, &instance_id, &new_version_id, installed_version_id).await;
+    let ok = result.is_ok();
     let _ = state.log_tx.send(match result {
-        Ok((minecraft_version, loader_version)) => WsEvent::UpdateDone { instance_id, minecraft_version, loader_version },
-        Err(error) => WsEvent::UpdateFailed { instance_id, error },
+        Ok((minecraft_version, loader_version)) => WsEvent::UpdateDone { instance_id: instance_id.clone(), minecraft_version, loader_version },
+        Err(error) => WsEvent::UpdateFailed { instance_id: instance_id.clone(), error },
     });
+    if ok {
+        crate::distribution::announce_update(&state, &instance_id).await;
+    }
 }
 
 async fn do_update_modpack(
@@ -691,7 +702,7 @@ impl PackIndex {
 
 /// Resolves a path from a modpack against `root`, refusing absolute paths and `..`
 /// so a malicious pack can't write outside the server directory.
-fn safe_pack_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
+pub(crate) fn safe_pack_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
     let rel = Path::new(relative);
     let ok = !relative.is_empty()
         && rel.components().all(|c| matches!(c, std::path::Component::Normal(_)));
@@ -775,7 +786,7 @@ fn override_paths(bytes: &[u8]) -> Result<Vec<String>, String> {
     Ok(paths)
 }
 
-fn parse_mrpack_index(bytes: &[u8]) -> Result<PackIndex, String> {
+pub(crate) fn parse_mrpack_index(bytes: &[u8]) -> Result<PackIndex, String> {
     let cursor = std::io::Cursor::new(bytes);
     let mut archive = zip::ZipArchive::new(cursor)
         .map_err(|e| format!("Failed to open mrpack archive: {}", e))?;
@@ -832,7 +843,7 @@ fn extract_overrides(bytes: &[u8], dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn detect_loader(deps: &HashMap<String, String>) -> (Option<String>, Option<String>) {
+pub(crate) fn detect_loader(deps: &HashMap<String, String>) -> (Option<String>, Option<String>) {
     for (key, loader_name) in [
         ("neoforge", "neoforge"),
         ("forge", "forge"),

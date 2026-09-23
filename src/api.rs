@@ -220,6 +220,7 @@ pub async fn add_instance(
         }),
         alerts: None,
         schedules: vec![],
+        distribution: None,
     };
 
     let toml_str = toml::to_string_pretty(&config)
@@ -826,6 +827,60 @@ pub async fn write_file(
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map(|_| StatusCode::NO_CONTENT)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))
+}
+
+// ── Sharing mods with players ────────────────────────────────────────────────
+
+pub async fn get_distribution(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<crate::distribution::DistributionStatus>> {
+    crate::distribution::status(&state, &id).await.map(Json).map_err(|e| err(StatusCode::NOT_FOUND, e))
+}
+
+#[derive(Deserialize)]
+pub struct SetDistributionRequest {
+    pub enabled: bool,
+    /// Replace the link token; links and instances using the old one stop working
+    #[serde(default)]
+    pub new_link: bool,
+}
+
+pub async fn set_distribution(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<SetDistributionRequest>,
+) -> ApiResult<Json<crate::distribution::DistributionStatus>> {
+    crate::distribution::update_config(&state, &id, |d| {
+        d.enabled = req.enabled;
+        if req.new_link {
+            d.token = crate::distribution::new_token();
+        }
+    })
+    .await
+    .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    crate::distribution::status(&state, &id).await.map(Json).map_err(|e| err(StatusCode::NOT_FOUND, e))
+}
+
+#[derive(Deserialize)]
+pub struct SetDistributionModRequest {
+    pub key: String,
+    /// true/false to force, null to go back to MSM's automatic choice
+    pub include: Option<bool>,
+}
+
+pub async fn set_distribution_mod(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<SetDistributionModRequest>,
+) -> ApiResult<Json<crate::distribution::DistributionStatus>> {
+    crate::distribution::update_config(&state, &id, |d| match req.include {
+        Some(v) => { d.mods.insert(req.key.clone(), v); }
+        None => { d.mods.remove(&req.key); }
+    })
+    .await
+    .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    crate::distribution::status(&state, &id).await.map(Json).map_err(|e| err(StatusCode::NOT_FOUND, e))
 }
 
 // ── Offline player data ──────────────────────────────────────────────────────

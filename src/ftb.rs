@@ -224,6 +224,7 @@ async fn do_import(state: &Arc<AppState>, req: FtbImportRequest) -> Result<(), S
         }),
         alerts: None,
         schedules: vec![],
+        distribution: None,
     };
 
     let toml_str = toml::to_string_pretty(&config)
