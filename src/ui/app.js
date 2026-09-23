@@ -286,18 +286,20 @@ function updateCard(inst) {
   const el = document.getElementById('card-' + inst.id)
   if (!el) { renderDashboard(); return }
 
-  const running = [...instances.values()].find(i => (i.status === 'running' || i.status === 'starting') && i.id !== inst.id)
-    ?? (inst.status === 'running' || inst.status === 'starting' ? inst : undefined)
-
   el.className = 'card card-' + inst.status
   el.querySelector('.badge').className = 'badge badge-' + inst.status
   el.querySelector('.badge').textContent = statusLabel(inst.status)
   el.querySelector('.card-mid').innerHTML = cardMidHTML(inst)
-  el.querySelector('.card-actions').innerHTML = cardActionsHTML(inst, running)
+
+  // Every card's buttons depend on whether some server is running (Start vs Switch To)
+  const anyRunning = [...instances.values()].find(i => i.status === 'running' || i.status === 'starting')
+  for (const other of instances.values()) {
+    const actions = document.getElementById('card-' + other.id)?.querySelector('.card-actions')
+    if (actions) actions.innerHTML = cardActionsHTML(other, anyRunning)
+  }
 
   // Update header running badge
   const runningBadge = document.getElementById('running-badge')
-  const anyRunning = [...instances.values()].find(i => i.status === 'running' || i.status === 'starting')
   if (anyRunning) {
     document.getElementById('running-name').textContent = anyRunning.display_name
     runningBadge.classList.remove('hidden')
