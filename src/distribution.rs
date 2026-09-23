@@ -726,17 +726,13 @@ pub async fn pack_file(
     let Some((id, port)) = instance_for_token(&state, &token).await else { return not_found() };
     let pack = match current_pack(&state, &id).await { Ok(p) => p, Err(e) => return pack_error(e) };
     let base = base_url(&state, &headers);
-    let slug: String = pack.set.name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    let slug = file_slug(&pack.set.name);
 
     match rest.as_str() {
-        "_msm/prism.zip" => {
-            let bootstrap = match bootstrap_jar(&state).await { Ok(b) => b, Err(e) => return pack_error(e) };
-            let pack_url = format!("{}/pack/{}/pack.toml", base, token);
-            match prism_instance_zip(&pack.set, &pack_url, &server_address(&base, port), &bootstrap) {
-                Ok(bytes) => download(bytes, "application/zip", &format!("{}.zip", slug)),
-                Err(e) => pack_error(e),
-            }
-        }
+        "_msm/prism.zip" => match build_prism(&state, &pack, &base, &token, port).await {
+            Ok(bytes) => download(bytes, "application/zip", &format!("{}.zip", slug)),
+            Err(e) => pack_error(e),
+        },
         "_msm/pack.mrpack" => {
             let p = pack.clone();
             match tokio::task::spawn_blocking(move || mrpack_export(&p.set)).await {
@@ -764,6 +760,56 @@ pub async fn pack_file(
             None => not_found(),
         },
     }
+}
+
+async fn build_prism(state: &AppState, pack: &GeneratedPack, base: &str, token: &str, port: u16) -> Result<Vec<u8>, String> {
+    let bootstrap = bootstrap_jar(state).await?;
+    let pack_url = format!("{}/pack/{}/pack.toml", base, token);
+    prism_instance_zip(&pack.set, &pack_url, &server_address(base, port), &bootstrap)
+}
+
+fn file_slug(name: &str) -> String {
+    name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
+}
+
+/// Files the Discord bot hands out: always the .mrpack; the Prism instance only when
+/// `public_url` is set, since the instance must point at an address players can reach.
+pub struct PlayerDownloads {
+    pub name: String,
+    pub summary: String,
+    pub join_url: Option<String>,
+    pub mrpack: (String, Vec<u8>),
+    pub prism: Option<(String, Vec<u8>)>,
+}
+
+pub async fn player_downloads(state: &Arc<AppState>, instance_id: &str, with_prism: bool) -> Result<PlayerDownloads, String> {
+    let (token, port) = {
+        let instances = state.instances.read().await;
+        let inst = instances.get(instance_id).ok_or("Instance not found")?;
+        let d = inst.config.distribution.as_ref().filter(|d| d.enabled).ok_or("Sharing isn't turned on for this server")?;
+        (d.token.clone(), inst.config.instance.port)
+    };
+    let pack = current_pack(state, instance_id).await?;
+    let slug = file_slug(&pack.set.name);
+    let p = pack.clone();
+    let mrpack = tokio::task::spawn_blocking(move || mrpack_export(&p.set)).await.map_err(|e| e.to_string())??;
+    let public_base = state.global_config.web.as_ref().and_then(|w| w.public_url.clone()).map(|u| u.trim_end_matches('/').to_string());
+    let prism = match (&public_base, with_prism) {
+        (Some(base), true) => Some((format!("{}.zip", slug), build_prism(state, &pack, base, &token, port).await?)),
+        _ => None,
+    };
+    let set = &pack.set;
+    let loader = match (set.loader.as_deref(), &set.loader_version) {
+        (Some(l), Some(v)) => format!("{} {}", crate::setup::loader_name(l), v),
+        _ => "Vanilla".to_string(),
+    };
+    Ok(PlayerDownloads {
+        name: set.name.clone(),
+        summary: format!("Minecraft {} · {} · {} mods", set.minecraft, loader, set.mods.iter().filter(|m| m.included).count()),
+        join_url: public_base.map(|b| format!("{}/pack/{}/", b, token)),
+        mrpack: (format!("{}.mrpack", slug), mrpack),
+        prism,
+    })
 }
 
 fn download(bytes: Vec<u8>, content_type: &str, filename: &str) -> Response {

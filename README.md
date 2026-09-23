@@ -54,6 +54,7 @@ A self-hosted Minecraft server manager built in Rust. Runs a local web dashboard
 | `/backup` | Trigger a backup of the running instance |
 | `/cmd <command>` | Send a command to the server console |
 | `/ip` | Show the server's current public IP address |
+| `/modpack [instance]` | Get the server's modpack: the `.mrpack` for any launcher, plus the self-updating Prism instance when `public_url` is set (reply visible only to you) |
 
 The bot also posts notifications to a configured channel when servers start, stop, crash, players join/leave, or backups complete.
 
@@ -189,7 +190,7 @@ On an instance's **Mods** tab, click **Share with players** and turn sharing on.
 - **What players get:** for Modrinth modpacks, the pack's client files (including client-only mods and configs) minus anything you removed from the server; plus mods you added to the server that Modrinth says are needed on clients. Server-only mods are left out. Jars that aren't on Modrinth are off by default — tick the ones players need. Any automatic choice can be overridden.
 - **Prism Launcher (recommended):** the join page offers a ready-made instance. Players drag it into Prism and press Launch. On every launch, [packwiz-installer](https://packwiz.infra.link/) syncs the mods with the server — new mods are downloaded, removed ones deleted — and moves the instance to a new Minecraft or loader version when the server changes. The server is already in the multiplayer list.
 - **Other launchers:** a `.mrpack` of the current mod list, for the Modrinth App and other launchers. It doesn't update itself; players download it again after changes.
-- **Announcements:** after a modpack or loader update, the Discord bot tells players what to do, with the join link if `public_url` is set.
+- **Discord:** `/modpack` hands players the `.mrpack` (and the Prism instance when `public_url` is set) right in Discord. After a modpack or loader update, the bot announces it with the new `.mrpack` attached, so players on other launchers can just re-import it. Files over Discord's 10 MB bot limit are replaced by the join page link.
 
 Mods on Modrinth are downloaded from Modrinth; MSM only serves the mod list, configs and jars that aren't on Modrinth. Anyone with the link can download the mods — **New link** replaces it (players then need to download the Prism instance again).
 

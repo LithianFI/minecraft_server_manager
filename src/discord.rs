@@ -435,6 +435,119 @@ async fn mods(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Discord's upload limit for bots in servers without boosts
+const DISCORD_MAX_UPLOAD: usize = 10 * 1024 * 1024;
+
+fn attach_if_fits(files: &mut Vec<serenity::CreateAttachment>, file: Option<(String, Vec<u8>)>) -> bool {
+    match file {
+        Some((name, bytes)) if bytes.len() <= DISCORD_MAX_UPLOAD => {
+            files.push(serenity::CreateAttachment::bytes(bytes, name));
+            true
+        }
+        _ => false,
+    }
+}
+
+async fn announce_player_update(
+    state: Arc<AppState>,
+    http: Arc<serenity::Http>,
+    channel: serenity::ChannelId,
+    instance_id: String,
+    join_url: Option<String>,
+) {
+    let mut text = format!(
+        "🧩 **{}** was updated. Prism Launcher players get the new mods automatically the next time they start the game.",
+        instance_id
+    );
+    let mut files = Vec::new();
+    match crate::distribution::player_downloads(&state, &instance_id, false).await {
+        Ok(d) => {
+            text = format!(
+                "🧩 **{}** was updated ({}). Prism Launcher players get the new mods automatically the next time they start the game.",
+                d.name, d.summary
+            );
+            let file = d.mrpack.0.clone();
+            if attach_if_fits(&mut files, Some(d.mrpack)) {
+                text.push_str(&format!("\n**Other launchers:** import the attached `{}` again (Modrinth App: Add instance → Import).", file));
+            } else if let Some(url) = &join_url {
+                text.push_str(&format!("\n**Other launchers:** the pack is too big for Discord — download it from {}", url));
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Couldn't build player downloads for Discord: {}", e);
+            if let Some(url) = &join_url {
+                text.push_str(&format!("\n**Other launchers:** download the new pack from {}", url));
+            }
+        }
+    }
+    if let Err(e) = channel.send_message(&http, serenity::CreateMessage::new().content(text).add_files(files)).await {
+        tracing::warn!("Discord notification failed: {}", e);
+    }
+}
+
+/// Get the server's modpack for your launcher
+#[poise::command(slash_command)]
+async fn modpack(
+    ctx: Context<'_>,
+    #[description = "Server (defaults to the running one)"]
+    #[autocomplete = "autocomplete_instance"]
+    instance_id: Option<String>,
+) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
+    let state = ctx.data().state.clone();
+
+    // Which shared server: the one asked for, else the running one, else the only shared one
+    let target = {
+        let instances = state.instances.read().await;
+        let shared: Vec<&crate::state::InstanceState> = instances.values()
+            .filter(|i| i.config.distribution.as_ref().is_some_and(|d| d.enabled))
+            .collect();
+        match &instance_id {
+            Some(id) => shared.iter().find(|i| &i.id == id).map(|i| i.id.clone()).ok_or_else(|| format!("Mod sharing isn't turned on for **{}**.", id)),
+            None => shared.iter()
+                .find(|i| matches!(i.status, InstanceStatus::Running | InstanceStatus::Starting))
+                .or_else(|| if shared.len() == 1 { shared.first() } else { None })
+                .map(|i| i.id.clone())
+                .ok_or_else(|| if shared.is_empty() {
+                    "Mod sharing isn't turned on for any server (dashboard → Mods → Share with players).".to_string()
+                } else {
+                    format!("Which server? Try `/modpack` with one of: {}", shared.iter().map(|i| i.id.as_str()).collect::<Vec<_>>().join(", "))
+                }),
+        }
+    };
+    let id = match target {
+        Ok(id) => id,
+        Err(msg) => { ctx.say(format!("❌ {}", msg)).await?; return Ok(()); }
+    };
+
+    let d = match crate::distribution::player_downloads(&state, &id, true).await {
+        Ok(d) => d,
+        Err(e) => { ctx.say(format!("❌ Couldn't build the modpack: {}", e)).await?; return Ok(()); }
+    };
+
+    let mut lines = vec![format!("📦 **{}** — {}", d.name, d.summary)];
+    let mut files = Vec::new();
+    let prism_name = d.prism.as_ref().map(|p| p.0.clone());
+    if attach_if_fits(&mut files, d.prism) {
+        lines.push(format!("**Prism Launcher** (updates itself): drag `{}` into Prism, then Launch.", prism_name.unwrap_or_default()));
+    }
+    let mrpack_name = d.mrpack.0.clone();
+    if attach_if_fits(&mut files, Some(d.mrpack)) {
+        lines.push(format!("**Modrinth App / other launchers:** import `{}`. Run `/modpack` again after updates.", mrpack_name));
+    } else {
+        lines.push("The .mrpack is too big for Discord.".to_string());
+    }
+    if let Some(url) = d.join_url {
+        lines.push(format!("Join page: {}", url));
+    }
+    let reply = files.into_iter().fold(
+        poise::CreateReply::default().content(lines.join("\n")).ephemeral(true),
+        |reply, file| reply.attachment(file),
+    );
+    ctx.send(reply).await?;
+    Ok(())
+}
+
 /// Show the public IP address of this server
 #[poise::command(slash_command)]
 async fn ip(ctx: Context<'_>) -> Result<(), Error> {
@@ -577,6 +690,7 @@ async fn seed(ctx: Context<'_>) -> Result<(), Error> {
 // ── Notification task ─────────────────────────────────────────────────────────
 
 async fn notify_task(
+    state: Arc<AppState>,
     http: Arc<serenity::Http>,
     channel_id: u64,
     mut rx: broadcast::Receiver<WsEvent>,
@@ -597,15 +711,10 @@ async fn notify_task(
                         _ => None,
                     },
                     WsEvent::PlayerModsChanged { instance_id, join_url } if cfg.mods_installed => {
-                        let mut msg = format!(
-                            "🧩 **{}** was updated. Players using the Prism instance get the new mods automatically next time they start the game.",
-                            instance_id
-                        );
-                        match join_url {
-                            Some(url) => msg.push_str(&format!("\nEveryone else: download the new pack from {}", url)),
-                            None => msg.push_str("\nPlayers using a downloaded .mrpack need to download it again from the join page."),
-                        }
-                        Some(msg)
+                        // Sent with the new .mrpack attached; built in the background so other
+                        // notifications aren't held up
+                        tokio::spawn(announce_player_update(state.clone(), http.clone(), channel, instance_id.clone(), join_url.clone()));
+                        None
                     }
                     WsEvent::CrashDetected { instance_id, summary } if cfg.server_crashed => {
                         let mut msg = format!("🔴 **{}** has crashed!", instance_id);
@@ -693,7 +802,7 @@ async fn run_bot(state: Arc<AppState>, config: DiscordConfig) {
     // Subscribe before connecting so we don't miss early events
     let notify_rx = state.log_tx.subscribe();
     let http = Arc::new(serenity::Http::new(&token));
-    tokio::spawn(notify_task(http, channel_id, notify_rx, state.discord_notify.clone()));
+    tokio::spawn(notify_task(state.clone(), http, channel_id, notify_rx, state.discord_notify.clone()));
 
     let state_data = state.clone();
     let framework = poise::Framework::builder()
@@ -712,6 +821,7 @@ async fn run_bot(state: Arc<AppState>, config: DiscordConfig) {
                 cmd(),
                 ip(),
                 mods(),
+                modpack(),
             ],
             on_error: |err| {
                 Box::pin(async move {
