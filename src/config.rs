@@ -167,6 +167,25 @@ mod tests {
     }
 
     #[test]
+    fn repairs_year_based_neoforge_minecraft_version() {
+        let meta = |mc: &str, loader: &str, lv: &str| InstanceMeta {
+            name: "x".into(), display_name: None, minecraft_version: mc.into(),
+            loader: Some(loader.into()), loader_version: Some(lv.into()), port: 25565,
+            modrinth_project_id: None, modrinth_version_id: None,
+        };
+        let mut m = meta("1.26.1", "neoforge", "26.1.0.19-beta");
+        assert_eq!(repair_minecraft_version(&mut m).as_deref(), Some("1.26.1"));
+        assert_eq!(m.minecraft_version, "26.1");
+        let mut m = meta("1.26.1.2", "neoforge", "26.1.2.7");
+        repair_minecraft_version(&mut m);
+        assert_eq!(m.minecraft_version, "26.1.2");
+        // Already right, or not affected
+        assert!(repair_minecraft_version(&mut meta("26.1", "neoforge", "26.1.0.19")).is_none());
+        assert!(repair_minecraft_version(&mut meta("1.21.1", "neoforge", "21.1.200")).is_none());
+        assert!(repair_minecraft_version(&mut meta("1.21.1", "fabric", "0.16.0")).is_none());
+    }
+
+    #[test]
     fn rejects_misspelt_web_keys() {
         assert!(toml::from_str::<GlobalConfig>("[web]\npasword = \"x\"\n").is_err());
         assert!(toml::from_str::<GlobalConfig>("[wbe]\npassword = \"x\"\n").is_err());
@@ -333,13 +352,20 @@ pub async fn load_instance_dir(path: &std::path::Path) -> Option<(String, crate:
 
     let config: InstanceConfig = if msm_toml.exists() {
         let content = fs::read_to_string(&msm_toml).await.ok()?;
-        match toml::from_str(&content) {
+        let mut config: InstanceConfig = match toml::from_str(&content) {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!("Failed to parse {}: {}", msm_toml.display(), e);
                 return None;
             }
+        };
+        if let Some(bad) = repair_minecraft_version(&mut config.instance) {
+            tracing::info!("'{}': corrected Minecraft version {} → {}", id, bad, config.instance.minecraft_version);
+            if let Ok(toml_str) = toml::to_string_pretty(&config) {
+                let _ = fs::write(&msm_toml, toml_str).await;
+            }
         }
+        config
     } else {
         // Auto-detect: only import if this looks like a NeoForge/Forge server
         let auto = auto_detect_config(path)?;
@@ -439,6 +465,18 @@ fn auto_detect_config(dir: &std::path::Path) -> Option<InstanceConfig> {
     })
 }
 
+/// Older MSM versions read NeoForge 26.x (for Minecraft 26.x) as Minecraft "1.26.x", a version
+/// that doesn't exist. Fixes it from the loader version; returns the wrong value if it changed.
+fn repair_minecraft_version(meta: &mut InstanceMeta) -> Option<String> {
+    let loader_version = meta.loader_version.as_deref().filter(|_| meta.loader.as_deref() == Some("neoforge"))?;
+    let year_based = loader_version.split('.').next()?.parse::<u32>().is_ok_and(|m| m >= 26);
+    if !year_based || !meta.minecraft_version.starts_with("1.") {
+        return None;
+    }
+    let correct = crate::setup::neoforge_to_mc(loader_version);
+    Some(std::mem::replace(&mut meta.minecraft_version, correct))
+}
+
 struct LoaderInfo {
     minecraft_version: String,
     loader: String,
@@ -454,16 +492,9 @@ fn detect_loader_info(dir: &std::path::Path) -> Option<LoaderInfo> {
     if let Some(idx) = run_sh.find("/neoforged/neoforge/") {
         let after = &run_sh[idx + "/neoforged/neoforge/".len()..];
         let nf_ver = after.split('/').next()?;
-        let parts: Vec<&str> = nf_ver.split('.').collect();
-        if parts.len() >= 2 {
-            let minor: u32 = parts[1].parse().ok()?;
-            let mc_ver = if minor == 0 {
-                format!("1.{}", parts[0])
-            } else {
-                format!("1.{}.{}", parts[0], parts[1])
-            };
+        if nf_ver.split('.').count() >= 2 {
             return Some(LoaderInfo {
-                minecraft_version: mc_ver,
+                minecraft_version: crate::setup::neoforge_to_mc(nf_ver),
                 loader: "neoforge".to_string(),
                 loader_version: Some(nf_ver.to_string()),
             });

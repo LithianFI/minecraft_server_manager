@@ -449,7 +449,7 @@ pub async fn update_server_version(
     crate::distribution::announce_update(&state, &instance_id).await;
 }
 
-fn neoforge_to_mc(nf: &str) -> String {
+pub(crate) fn neoforge_to_mc(nf: &str) -> String {
     let parts: Vec<&str> = nf.split('.').collect();
     // Year-based versions: "26.1.2.x" → MC 26.1.2, "26.2.0.x" → MC 26.2
     if parts.len() >= 4 && parts[0].parse::<u32>().is_ok_and(|m| m >= 26) {
