@@ -204,7 +204,7 @@ async fn fabric_versions(client: &reqwest::Client) -> Result<Vec<McVersionEntry>
 }
 
 /// Numeric components of a version string, for ordering ("1.20.1" → [1, 20, 1]).
-fn version_key(v: &str) -> Vec<u32> {
+pub(crate) fn version_key(v: &str) -> Vec<u32> {
     v.split('.').map(|p| p.parse().unwrap_or(0)).collect()
 }
 

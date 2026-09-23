@@ -39,7 +39,7 @@ pub async fn run_ram_task(state: Arc<AppState>, instance_id: String, pid: u32) {
             pct
         };
 
-        let (tps, loader, player_count, ram_alert_msg) = {
+        let (tps, has_tps, player_count, ram_alert_msg) = {
             let mut instances = state.instances.write().await;
             if let Some(inst) = instances.get_mut(&instance_id) {
                 inst.ram_mb = Some(ram_mb);
@@ -58,12 +58,15 @@ pub async fn run_ram_task(state: Arc<AppState>, instance_id: String, pid: u32) {
                 } else { None };
                 (
                     inst.tps,
-                    inst.config.instance.loader.clone().unwrap_or_default(),
+                    tps_command(
+                        inst.config.instance.loader.as_deref().unwrap_or_default(),
+                        &inst.config.instance.minecraft_version,
+                    ).is_some(),
                     inst.players.len(),
                     ram_alert,
                 )
             } else {
-                (None, String::new(), 0, None)
+                (None, false, 0, None)
             }
         };
 
@@ -82,9 +85,9 @@ pub async fn run_ram_task(state: Arc<AppState>, instance_id: String, pid: u32) {
             });
         }
 
-        // For non-Forge/NeoForge servers write RAM to DB every 60 s (every 6th iteration).
-        // Forge/NeoForge servers write their own rows from TPS parsing in instance.rs.
-        if iter % 6 == 0 && loader != "neoforge" && loader != "forge" {
+        // Servers without a TPS command get a RAM-only DB row every 60 s (every 6th iteration);
+        // the others write their rows from TPS parsing in instance.rs.
+        if iter % 6 == 0 && !has_tps {
             state.metrics_db.record_metric(
                 &instance_id,
                 chrono::Utc::now().timestamp(),
@@ -130,6 +133,17 @@ fn read_proc_ram(pid: u32) -> Option<u64> {
 
 // ── TPS polling ───────────────────────────────────────────────────────────────
 
+/// The console command that reports TPS for this server, if it has one.
+pub fn tps_command(loader: &str, minecraft_version: &str) -> Option<&'static str> {
+    match loader {
+        "neoforge" => Some("neoforge tps"),
+        "forge"    => Some("forge tps"),
+        // Vanilla `/tick query` exists since 1.20.3 and works on Fabric, Quilt and vanilla
+        _ if crate::setup::version_key(minecraft_version) >= vec![1, 20, 3] => Some("tick query"),
+        _ => None,
+    }
+}
+
 pub async fn run_tps_task(state: Arc<AppState>, instance_id: String) {
     // Wait for the server to finish starting before first poll
     tokio::time::sleep(Duration::from_secs(60)).await;
@@ -147,17 +161,14 @@ pub async fn run_tps_task(state: Arc<AppState>, instance_id: String) {
         }
 
         {
-            let loader = {
+            let tps_cmd = {
                 let instances = state.instances.read().await;
-                instances.get(&instance_id)
-                    .and_then(|i| i.config.instance.loader.clone())
-                    .unwrap_or_default()
-            };
-            // The TPS command is only available on Forge ("forge tps") and NeoForge ("neoforge tps")
-            let tps_cmd = match loader.as_str() {
-                "neoforge" => Some("neoforge tps"),
-                "forge"    => Some("forge tps"),
-                _          => None,
+                instances.get(&instance_id).and_then(|i| {
+                    tps_command(
+                        i.config.instance.loader.as_deref().unwrap_or_default(),
+                        &i.config.instance.minecraft_version,
+                    )
+                })
             };
             if let Some(cmd) = tps_cmd {
                 let processes = state.processes.lock().await;
@@ -173,11 +184,26 @@ pub async fn run_tps_task(state: Arc<AppState>, instance_id: String) {
 
 // ── TPS line parser (called from instance.rs log processing) ─────────────────
 
-/// Parses the "Overall" line of the TPS command output (per-dimension lines are ignored):
+/// Parses TPS from the output of the server's TPS command (see [`tps_command`]):
 ///   Forge, NeoForge 1.20.x: "Overall: Mean tick time: 0.519 ms. Mean TPS: 20.000"
 ///   NeoForge 1.21+:         "Overall: 20.000 TPS (0.519 ms/tick)"
-/// The number follows the JVM locale, so "20,000" is accepted too.
+///   Vanilla `tick query`:   "Average time per tick: 2.3ms (Target: 50.0ms)"
+/// Per-dimension lines are ignored. Numbers follow the JVM locale, so "20,000" is accepted too.
 pub fn parse_tps(line: &str) -> Option<f32> {
+    parse_overall_tps(line).or_else(|| parse_tick_query(line))
+}
+
+/// TPS from vanilla `tick query`: the server can't run faster than its target tick time.
+fn parse_tick_query(line: &str) -> Option<f32> {
+    let rest = &line[line.find("Average time per tick: ")? + "Average time per tick: ".len()..];
+    let (avg, rest) = rest.split_once("ms (Target: ")?;
+    let target = rest.split_once("ms)")?.0;
+    let parse = |s: &str| s.trim().replace(',', ".").parse::<f32>().ok();
+    let tick_ms = parse(avg)?.max(parse(target)?);
+    (tick_ms > 0.0).then(|| 1000.0 / tick_ms)
+}
+
+fn parse_overall_tps(line: &str) -> Option<f32> {
     let rest = &line[line.find("Overall: ")? + "Overall: ".len()..];
     let (num, neoforge_style) = match rest.find("Mean TPS: ") {
         Some(pos) => (&rest[pos + "Mean TPS: ".len()..], false),
@@ -212,6 +238,30 @@ mod tests {
     fn parses_comma_decimal() {
         assert_eq!(parse_tps("Overall: 19,750 TPS (50,633 ms/tick)"), Some(19.75));
         assert_eq!(parse_tps("Overall: Mean tick time: 0,519 ms. Mean TPS: 20,000"), Some(20.0));
+    }
+
+    #[test]
+    fn parses_tick_query() {
+        // Keeping up: capped at the target rate
+        assert_eq!(parse_tps("Average time per tick: 2.3ms (Target: 50.0ms)"), Some(20.0));
+        // Lagging: 80 ms per tick → 12.5 TPS
+        assert_eq!(parse_tps("Average time per tick: 80.0ms (Target: 50.0ms)"), Some(12.5));
+        assert_eq!(parse_tps("Average time per tick: 80,0ms (Target: 50,0ms)"), Some(12.5));
+        // Sprinting has no target and says nothing about normal TPS
+        assert_eq!(parse_tps("Average time per tick: 2.3ms"), None);
+        assert_eq!(parse_tps("Target tick rate: 20.0 per second."), None);
+    }
+
+    #[test]
+    fn picks_tps_command() {
+        use super::tps_command;
+        assert_eq!(tps_command("neoforge", "1.21.1"), Some("neoforge tps"));
+        assert_eq!(tps_command("forge", "1.20.1"), Some("forge tps"));
+        assert_eq!(tps_command("fabric", "1.21.1"), Some("tick query"));
+        assert_eq!(tps_command("fabric", "1.20.3"), Some("tick query"));
+        assert_eq!(tps_command("fabric", "26.1"), Some("tick query"));
+        assert_eq!(tps_command("fabric", "1.20.2"), None);
+        assert_eq!(tps_command("", "1.19.4"), None);
     }
 
     #[test]
