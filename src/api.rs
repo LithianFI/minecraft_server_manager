@@ -195,7 +195,7 @@ pub async fn add_instance(
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create directory: {}", e)))?;
 
-    let config = InstanceConfig {
+    let mut config = InstanceConfig {
         restart: None,
         instance: InstanceMeta {
             name: id.clone(),
@@ -222,6 +222,8 @@ pub async fn add_instance(
         schedules: vec![],
         distribution: None,
     };
+    // "1.26.1" and the like don't exist; Minecraft went from 1.21 to year-based 26.1
+    crate::config::repair_minecraft_version(&mut config.instance);
 
     let toml_str = toml::to_string_pretty(&config)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

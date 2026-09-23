@@ -183,6 +183,13 @@ mod tests {
         assert!(repair_minecraft_version(&mut meta("26.1", "neoforge", "26.1.0.19")).is_none());
         assert!(repair_minecraft_version(&mut meta("1.21.1", "neoforge", "21.1.200")).is_none());
         assert!(repair_minecraft_version(&mut meta("1.21.1", "fabric", "0.16.0")).is_none());
+        // Other loaders, or no usable loader version: drop the bogus "1." prefix
+        let mut m = meta("1.26.1", "fabric", "0.17.2");
+        repair_minecraft_version(&mut m);
+        assert_eq!(m.minecraft_version, "26.1");
+        let mut m = meta("1.26.1", "neoforge", "");
+        repair_minecraft_version(&mut m);
+        assert_eq!(m.minecraft_version, "26.1");
     }
 
     #[test]
@@ -466,14 +473,19 @@ fn auto_detect_config(dir: &std::path::Path) -> Option<InstanceConfig> {
 }
 
 /// Older MSM versions read NeoForge 26.x (for Minecraft 26.x) as Minecraft "1.26.x", a version
-/// that doesn't exist. Fixes it from the loader version; returns the wrong value if it changed.
-fn repair_minecraft_version(meta: &mut InstanceMeta) -> Option<String> {
-    let loader_version = meta.loader_version.as_deref().filter(|_| meta.loader.as_deref() == Some("neoforge"))?;
-    let year_based = loader_version.split('.').next()?.parse::<u32>().is_ok_and(|m| m >= 26);
-    if !year_based || !meta.minecraft_version.starts_with("1.") {
+/// that doesn't exist: after 1.21 Minecraft switched to year-based versions (26.1, …). Fixes it,
+/// from the NeoForge version when there is one; returns the wrong value if it changed.
+pub(crate) fn repair_minecraft_version(meta: &mut InstanceMeta) -> Option<String> {
+    let rest = meta.minecraft_version.strip_prefix("1.")?;
+    if !rest.split('.').next()?.parse::<u32>().is_ok_and(|m| m >= 26) {
         return None;
     }
-    let correct = crate::setup::neoforge_to_mc(loader_version);
+    let from_loader = meta.loader_version.as_deref()
+        .filter(|lv| meta.loader.as_deref() == Some("neoforge") && lv.split('.').next() == rest.split('.').next());
+    let correct = match from_loader {
+        Some(lv) => crate::setup::neoforge_to_mc(lv),
+        None => rest.to_string(),
+    };
     Some(std::mem::replace(&mut meta.minecraft_version, correct))
 }
 
