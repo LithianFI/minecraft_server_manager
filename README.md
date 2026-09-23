@@ -163,11 +163,15 @@ When started from a terminal, the dashboard opens in your browser automatically.
 
 The image bundles Java 8, 17, 21 and 25 (Temurin) so modpacks for any Minecraft version can run. Java 21 is the default; MSM picks the right one automatically for Modrinth/FTB imports, and you can choose any of them per instance in **Settings**.
 
+A prebuilt image is published to `ghcr.io/lithianfi/minecraft_server_manager` (`latest` tracks master; version tags such as `1.2.0` are published for releases).
+
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
 
-Then open `http://localhost:8080`.
+Then open `http://localhost:8080`. To update: `docker compose pull && docker compose up -d`. To build from source instead, uncomment `build: .` in `docker-compose.yml` and run `docker compose up -d --build`.
+
+> **Maintainers:** the image is built by `.github/workflows/docker.yml` on every push to master and on `v*` tags. GitHub creates the package as private on the first push — make it public under the repository's **Packages → Package settings** so `docker compose pull` works without logging in.
 
 - **Data:** everything lives in the `msm-data` volume, mounted at `/data`. MSM's data directory is `/data/msm` (config, instances, backups). When creating a server with the setup wizard, use a directory under `/data`, e.g. `/data/msm/servers/survival`.
 - **Config:** put `config.toml` (Discord bot, web port) at `/data/msm/config.toml`, e.g. `docker compose cp config.toml msm:/data/msm/config.toml` then restart.

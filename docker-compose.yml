@@ -1,7 +1,8 @@
 services:
   msm:
-    build: .
-    image: minecraft-server-manager:latest
+    image: ghcr.io/lithianfi/minecraft_server_manager:latest
+    # To build from source instead of pulling: uncomment and run `docker compose up -d --build`
+    # build: .
     container_name: msm
     restart: unless-stopped
     # Give running servers time to save the world on `docker compose down`
