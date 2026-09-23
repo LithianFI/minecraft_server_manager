@@ -3180,6 +3180,7 @@ async function checkUpdateMods(inst, mc) {
   if (check !== _updateModsCheck) return
 
   const total = plan.updates.length + plan.compatible.length + plan.missing.length + plan.unknown.length
+  const added = plan.dependencies.length
   btn.disabled = false
   if (!total) { box.classList.add('hidden'); return }
 
@@ -3187,8 +3188,9 @@ async function checkUpdateMods(inst, mc) {
     `<li class="${cls}"><span class="update-mods-name">${esc(name)}</span><span class="update-mods-detail">${detail}</span></li>`
   const rows = [
     ...plan.updates.map(u => row('ok', u.name, `${esc(u.installed_version_number)} → ${esc(u.latest_version_number)}`)),
+    ...plan.dependencies.map(d => row('new', d.name, `new · required by ${esc(d.required_by)}`)),
     ...plan.compatible.map(n => row('ok', n, 'already compatible')),
-    ...plan.missing.map(m => row('bad', m.name, 'no version yet · will be disabled')),
+    ...plan.missing.map(m => row('bad', m.name, m.needs ? `needs ${esc(m.needs)}, which has no version yet · will be disabled` : 'no version yet · will be disabled')),
     ...plan.unknown.map(n => row('unknown', n, 'not on Modrinth · left as is')),
   ]
   const problems = plan.missing.length + plan.unknown.length
@@ -3203,7 +3205,8 @@ async function checkUpdateMods(inst, mc) {
       `<div class="update-mods-note">Blocks and items from disabled mods disappear from the world. Wait for an update, or go ahead: the backup lets you roll back.</div>`
   }
   box.innerHTML = head + `<ul>${rows.join('')}</ul>`
-  if (plan.updates.length) btn.textContent = `Update Server & ${plan.updates.length} Mod${plan.updates.length === 1 ? '' : 's'}`
+  const changed = plan.updates.length + added
+  if (changed) btn.textContent = `Update Server & ${changed} Mod${changed === 1 ? '' : 's'}`
 }
 
 function closeUpdateModal() {

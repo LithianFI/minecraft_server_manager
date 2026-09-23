@@ -1580,6 +1580,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .update-mods li.ok::before      { content: '✓'; color: var(--green); }
 .update-mods li.bad::before     { content: '✕'; color: var(--amber); }
 .update-mods li.unknown::before { content: '?'; color: var(--text-muted); }
+.update-mods li.new::before     { content: '+'; color: var(--green); }
 .update-mods-name { color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .update-mods-detail { font-family: var(--mono); font-size: 11px; color: var(--text-dim); white-space: nowrap; }
 .update-mods li.bad .update-mods-detail { color: var(--amber); }

@@ -55,10 +55,28 @@ pub struct VersionChangePlan {
     pub updates: Vec<ModUpdate>,
     /// Mods whose installed version already supports the target (names)
     pub compatible: Vec<String>,
-    /// Mods with no version for the target yet; they get disabled
-    pub missing: Vec<ModEntry>,
+    /// Libraries the new versions require that aren't installed yet; installed with them
+    pub dependencies: Vec<NewDependency>,
+    /// Mods that can't move to the target yet; they get disabled
+    pub missing: Vec<MissingMod>,
     /// Jars Modrinth doesn't know, so MSM can't tell whether they'll work (names)
     pub unknown: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NewDependency {
+    #[serde(flatten)]
+    pub file: ModUpdate,
+    /// Name of the mod that needs it
+    pub required_by: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MissingMod {
+    #[serde(flatten)]
+    pub entry: ModEntry,
+    /// Set when the mod has a new version but a library it requires doesn't
+    pub needs: Option<String>,
 }
 
 // ── Modrinth response types ───────────────────────────────────────────────────
@@ -274,19 +292,148 @@ pub async fn plan_version_change(
     let checkable: Vec<&ModEntry> = lock.mods.iter().filter(|m| m.on_modrinth() && !m.disabled).collect();
     let latest = latest_versions(client, &checkable, mc_version, loader).await?;
     let mut plan = VersionChangePlan::default();
+    // Versions being installed, to look up what they require
+    let mut new_versions: Vec<(String, &MrVersion)> = Vec::new();
     for entry in checkable {
+        let missing = MissingMod { entry: entry.clone(), needs: None };
         match latest.get(&entry.sha512) {
             Some(v) if v.id == entry.modrinth_version_id => plan.compatible.push(entry.name.clone()),
             Some(v) => match to_update(entry, v) {
-                Some(update) => plan.updates.push(update),
-                None => plan.missing.push(entry.clone()),
+                Some(update) => {
+                    new_versions.push((entry.name.clone(), v));
+                    plan.updates.push(update);
+                }
+                None => plan.missing.push(missing),
             },
-            None => plan.missing.push(entry.clone()),
+            None => plan.missing.push(missing),
         }
     }
+
+    let (dependencies, unavailable) = resolve_dependencies(client, lock, new_versions, mc_version, loader).await?;
+    plan.dependencies = dependencies;
+    // A mod whose required library has no version for the target can't load: disable it instead
+    for (mod_name, library) in unavailable {
+        if let Some(i) = plan.updates.iter().position(|u| u.name == mod_name) {
+            let update = plan.updates.remove(i);
+            if let Some(entry) = lock.mods.iter().find(|m| m.modrinth_project_id == update.project_id) {
+                plan.missing.push(MissingMod { entry: entry.clone(), needs: Some(library) });
+            }
+        }
+    }
+
+    // Libraries are only needed by mods that still get updated
+    plan.dependencies.retain(|d| plan.updates.iter().any(|u| u.name == d.required_by));
+
     plan.unknown = lock.mods.iter().filter(|m| !m.on_modrinth() && !m.disabled).map(|m| m.name.clone()).collect();
     plan.updates.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(plan)
+}
+
+/// Finds the required libraries of `new_versions` (and theirs, and so on) that aren't installed,
+/// picking each one's newest version for `mc_version`. Also returns (mod name, library name) for
+/// libraries that have no such version.
+async fn resolve_dependencies(
+    client: &reqwest::Client,
+    lock: &ModLock,
+    new_versions: Vec<(String, &MrVersion)>,
+    mc_version: &str,
+    loader: &str,
+) -> Result<(Vec<NewDependency>, Vec<(String, String)>), String> {
+    let mut known: HashSet<String> = lock.mods.iter().map(|m| m.modrinth_project_id.clone()).collect();
+    // (project, pinned version, name of the mod that requires it)
+    let mut queue: Vec<(String, Option<String>, String)> = Vec::new();
+    let enqueue = |queue: &mut Vec<_>, known: &mut HashSet<String>, v: &MrVersion, name: &str| {
+        for dep in v.dependencies.iter().filter(|d| d.dependency_type == "required") {
+            if let Some(pid) = &dep.project_id {
+                if known.insert(pid.clone()) {
+                    queue.push((pid.clone(), dep.version_id.clone(), name.to_string()));
+                }
+            }
+        }
+    };
+    for (name, v) in &new_versions {
+        enqueue(&mut queue, &mut known, v, name);
+    }
+
+    let mut found: Vec<(MrVersion, String)> = Vec::new();
+    let mut unavailable_ids: Vec<(String, String)> = Vec::new();
+    while let Some((pid, pinned, required_by)) = queue.pop() {
+        let version = match pinned {
+            Some(vid) => Some(get_json::<MrVersion>(client, &format!("{}/version/{}", MODRINTH, vid)).await?),
+            None => {
+                let versions: Vec<MrVersion> = client
+                    .get(format!("{}/project/{}/version", MODRINTH, pid))
+                    .header("User-Agent", UA)
+                    .query(&[
+                        ("loaders", serde_json::json!([loader]).to_string()),
+                        ("game_versions", serde_json::json!([mc_version]).to_string()),
+                    ])
+                    .send()
+                    .await
+                    .map_err(|e| format!("Dependency lookup failed for {}: {}", pid, e))?
+                    .json()
+                    .await
+                    .map_err(|e| format!("Dependency parse error for {}: {}", pid, e))?;
+                versions.into_iter().next()
+            }
+        };
+        match version {
+            Some(v) => {
+                enqueue(&mut queue, &mut known, &v, &required_by);
+                found.push((v, required_by));
+            }
+            None => unavailable_ids.push((required_by, pid)),
+        }
+    }
+
+    // Libraries are listed by title, not ID
+    let ids: Vec<&str> = found.iter().map(|(v, _)| v.project_id.as_str())
+        .chain(unavailable_ids.iter().map(|(_, pid)| pid.as_str()))
+        .collect();
+    let titles: HashMap<String, String> = if ids.is_empty() {
+        HashMap::new()
+    } else {
+        let url = format!("{}/projects?ids={}", MODRINTH, serde_json::to_string(&ids).unwrap());
+        get_json::<Vec<MrProject>>(client, &url).await?.into_iter().map(|p| (p.id, p.title)).collect()
+    };
+    let title = |pid: &str| titles.get(pid).cloned().unwrap_or_else(|| pid.to_string());
+
+    let mut dependencies: Vec<NewDependency> = found
+        .iter()
+        .filter_map(|(v, required_by)| {
+            let file = v.files.iter().find(|f| f.primary).or_else(|| v.files.first())?;
+            Some(NewDependency {
+                file: ModUpdate {
+                    project_id: v.project_id.clone(),
+                    name: title(&v.project_id),
+                    installed_version_id: String::new(),
+                    installed_version_number: String::new(),
+                    latest_version_id: v.id.clone(),
+                    latest_version_number: v.version_number.clone(),
+                    download_url: file.url.clone(),
+                    filename: file.filename.clone(),
+                    sha512: file.hashes.sha512.clone(),
+                },
+                required_by: required_by.clone(),
+            })
+        })
+        .collect();
+    dependencies.sort_by(|a, b| a.file.name.cmp(&b.file.name));
+    let unavailable = unavailable_ids.into_iter().map(|(by, pid)| (by, title(&pid))).collect();
+    Ok((dependencies, unavailable))
+}
+
+async fn get_json<T: serde::de::DeserializeOwned>(client: &reqwest::Client, url: &str) -> Result<T, String> {
+    client
+        .get(url)
+        .header("User-Agent", UA)
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| format!("Modrinth request failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Modrinth parse error: {}", e))
 }
 
 /// Newest version of each mod for `mc_version`, keyed by the installed file's sha512.
@@ -658,7 +805,8 @@ pub async fn download_update(client: &reqwest::Client, update: &ModUpdate) -> Re
     Ok(bytes.to_vec())
 }
 
-/// Swaps the old jar for the downloaded one and updates the lock entry.
+/// Swaps the old jar for the downloaded one and updates the lock entry. A mod that isn't
+/// installed yet (a new library) is added.
 pub async fn install_update(
     bytes: &[u8],
     update: &ModUpdate,
@@ -672,7 +820,7 @@ pub async fn install_update(
         .iter()
         .find(|m| m.modrinth_project_id == update.project_id)
         .map(|m| m.filename.clone())
-        .ok_or_else(|| format!("Mod '{}' not in lock file", update.project_id))?;
+        .unwrap_or_else(|| update.filename.clone());
 
     // Write new file
     tokio::fs::write(mods_dir.join(&update.filename), bytes)
@@ -690,11 +838,22 @@ pub async fn install_update(
     }
 
     // Update lock entry
-    if let Some(entry) = lock.mods.iter_mut().find(|m| m.modrinth_project_id == update.project_id) {
-        entry.modrinth_version_id = update.latest_version_id.clone();
-        entry.version_number = update.latest_version_number.clone();
-        entry.filename = update.filename.clone();
-        entry.sha512 = update.sha512.clone();
+    match lock.mods.iter_mut().find(|m| m.modrinth_project_id == update.project_id) {
+        Some(entry) => {
+            entry.modrinth_version_id = update.latest_version_id.clone();
+            entry.version_number = update.latest_version_number.clone();
+            entry.filename = update.filename.clone();
+            entry.sha512 = update.sha512.clone();
+        }
+        None => lock.mods.push(ModEntry {
+            name: update.name.clone(),
+            modrinth_project_id: update.project_id.clone(),
+            modrinth_version_id: update.latest_version_id.clone(),
+            version_number: update.latest_version_number.clone(),
+            filename: update.filename.clone(),
+            sha512: update.sha512.clone(),
+            disabled: false,
+        }),
     }
 
     Ok(())

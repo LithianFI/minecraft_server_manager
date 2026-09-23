@@ -353,7 +353,8 @@ pub async fn update_server_version(
             Err(e) => { send_fail(format!("Couldn't check mods, update cancelled: {}", e)); return; }
         };
         let mut downloads = Vec::new();
-        for update in &plan.updates {
+        let libraries = plan.dependencies.iter().map(|d| &d.file);
+        for update in plan.updates.iter().chain(libraries) {
             send_log(format!("Downloading {} {}…", update.name, update.latest_version_number));
             match crate::mod_mgr::download_update(&state.http_client, update).await {
                 Ok(bytes) => downloads.push((update.clone(), bytes)),
@@ -390,15 +391,23 @@ pub async fn update_server_version(
                 send_fail(format!("{} — roll back from the Backups tab", e));
                 return;
             }
-            send_log(format!("Updated {} to {}", update.name, update.latest_version_number));
+            match plan.dependencies.iter().find(|d| d.file.project_id == update.project_id) {
+                Some(d) => send_log(format!("Added {} {} (required by {})", update.name, update.latest_version_number, d.required_by)),
+                None => send_log(format!("Updated {} to {}", update.name, update.latest_version_number)),
+            }
         }
         if let Err(e) = crate::mod_mgr::write_lock(&instance_dir, &lock) {
             send_fail(e);
             return;
         }
-        for entry in &plan.missing {
+        for missing in &plan.missing {
+            let entry = &missing.entry;
+            let reason = match &missing.needs {
+                Some(library) => format!("it requires {}, which has no version for Minecraft {} yet", library, minecraft_version),
+                None => format!("no version for Minecraft {} yet", minecraft_version),
+            };
             match crate::mod_mgr::set_mod_enabled(&server_path, &instance_dir, &entry.filename, false) {
-                Ok(_) => send_log(format!("⚠ Disabled {}: no version for Minecraft {} yet", entry.name, minecraft_version)),
+                Ok(_) => send_log(format!("⚠ Disabled {}: {}", entry.name, reason)),
                 Err(e) => { send_fail(format!("{} — roll back from the Backups tab", e)); return; }
             }
         }
