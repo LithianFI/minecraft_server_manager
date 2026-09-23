@@ -684,6 +684,25 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 }
 .btn-mod-update:hover { background: rgba(59,130,246,.1); border-color: rgba(59,130,246,.6); }
 
+.mod-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.btn-mod-action { padding: 4px 10px; font-size: 12px; }
+.btn-mod-remove:hover { color: var(--red); border-color: rgba(239,68,68,.5); background: var(--red-dim); }
+
+.mod-tag {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border: 1px solid var(--border-hi);
+  border-radius: 3px;
+  padding: 1px 5px;
+  margin-left: 6px;
+  display: inline-block; /* not struck through with the disabled name */
+}
+.mod-row.mod-disabled .mod-name,
+.mod-row.mod-disabled .mod-version { color: var(--text-muted); text-decoration: line-through; text-decoration-color: var(--border-hi); }
+
 .mods-empty {
   display: flex;
   flex-direction: column;

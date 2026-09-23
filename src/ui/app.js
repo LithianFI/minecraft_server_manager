@@ -1059,15 +1059,59 @@ function modRowHTML(mod, update) {
       <span class="mod-uptodate">✓</span>`
   }
 
+  if (!mod.modrinth_project_id) {
+    versionCol = `<span class="mod-tag" title="${esc(mod.filename)}">not on Modrinth</span>`
+  }
+
   const updateBtn = hasUpdate
     ? `<button class="btn-outline btn-mod-update" onclick="doUpdateMod('${esc(mod.modrinth_project_id)}', this)">Update</button>`
     : ''
+  // Encoded for the URL and safe inside the single-quoted onclick attribute
+  const file = encodeURIComponent(mod.filename).replace(/'/g, '%27')
+  const toggleBtn = mod.disabled
+    ? `<button class="btn-outline btn-mod-action" onclick="setModEnabled('${file}', true, this)">Enable</button>`
+    : `<button class="btn-outline btn-mod-action" onclick="setModEnabled('${file}', false, this)">Disable</button>`
+  const removeBtn = `<button class="btn-outline btn-mod-action btn-mod-remove" onclick="removeMod('${file}', this)" title="Delete this mod">✕</button>`
 
-  return `<div class="mod-row ${statusClass}">
-    <div class="mod-name">${esc(mod.name)}</div>
+  return `<div class="mod-row ${statusClass} ${mod.disabled ? 'mod-disabled' : ''}">
+    <div class="mod-name">${esc(mod.name)}${mod.disabled ? ' <span class="mod-tag">disabled</span>' : ''}</div>
     <div class="mod-version-cell">${versionCol}</div>
-    ${updateBtn}
+    <div class="mod-actions">${updateBtn}${toggleBtn}${removeBtn}</div>
   </div>`
+}
+
+function afterModChange(mods, message) {
+  const prev = modsData.get(detailId)
+  modsData.set(detailId, { mods, updates: prev?.updates ?? null })
+  renderMods()
+  const running = ['running', 'starting'].includes(instances.get(detailId)?.status)
+  setModsMsg(running ? `${message} Restart the server to apply.` : message, 'success')
+}
+
+async function setModEnabled(encodedFile, enabled, btn) {
+  if (!detailId) return
+  btn.disabled = true
+  try {
+    const mods = await api('POST', `/api/instances/${detailId}/mods/files/${encodedFile}/${enabled ? 'enable' : 'disable'}`)
+    afterModChange(mods, `${enabled ? 'Enabled' : 'Disabled'} ${decodeURIComponent(encodedFile).replace(/\.disabled$/, '')}.`)
+  } catch (e) {
+    btn.disabled = false
+    setModsMsg(e.message, 'error')
+  }
+}
+
+async function removeMod(encodedFile, btn) {
+  if (!detailId) return
+  const file = decodeURIComponent(encodedFile)
+  if (!confirm(`Delete ${file}?\n\nThe file is removed from the server's mods folder. Other mods that depend on it may stop the server from starting.`)) return
+  btn.disabled = true
+  try {
+    const mods = await api('DELETE', `/api/instances/${detailId}/mods/files/${encodedFile}`)
+    afterModChange(mods, `Removed ${file}.`)
+  } catch (e) {
+    btn.disabled = false
+    setModsMsg(e.message, 'error')
+  }
 }
 
 async function doScanMods() {
@@ -1079,7 +1123,8 @@ async function doScanMods() {
     const mods = await api('POST', `/api/instances/${detailId}/mods`)
     modsData.set(detailId, { mods: mods ?? [], updates: null })
     renderMods()
-    setModsMsg(`Found ${mods.length} mod${mods.length !== 1 ? 's' : ''} on Modrinth.`, 'success')
+    const onModrinth = mods.filter(m => m.modrinth_project_id).length
+    setModsMsg(`Found ${mods.length} mod${mods.length !== 1 ? 's' : ''} (${onModrinth} on Modrinth).`, 'success')
   } catch (e) {
     setModsMsg('Scan failed: ' + e.message, 'error')
   } finally {

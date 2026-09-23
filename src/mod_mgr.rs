@@ -15,7 +15,19 @@ pub struct ModEntry {
     pub version_number: String,
     pub filename: String,
     pub sha512: String,
+    /// Renamed to `<file>.jar.disabled`, so the loader skips it
+    #[serde(default)]
+    pub disabled: bool,
 }
+
+impl ModEntry {
+    /// Jars Modrinth doesn't recognise have no project ID and can't be updated.
+    pub fn on_modrinth(&self) -> bool {
+        !self.modrinth_project_id.is_empty()
+    }
+}
+
+const DISABLED_SUFFIX: &str = ".disabled";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ModLock {
@@ -120,7 +132,10 @@ pub async fn scan_mods(
         .map_err(|e| format!("Cannot read mods directory: {}", e))?
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("jar"))
+        .filter(|p| {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+            name.ends_with(".jar") || name.ends_with(".jar.disabled")
+        })
         .collect();
 
     if jar_paths.is_empty() {
@@ -139,8 +154,6 @@ pub async fn scan_mods(
     .await
     .map_err(|e| format!("Hash task panicked: {}", e))?;
 
-    let hash_to_path: HashMap<String, PathBuf> =
-        hashes.iter().map(|(p, h)| (h.clone(), p.clone())).collect();
     let hash_list: Vec<&str> = hashes.iter().map(|(_, h)| h.as_str()).collect();
 
     // Identify JARs by hash via Modrinth
@@ -181,23 +194,34 @@ pub async fn scan_mods(
         projects.into_iter().map(|p| (p.id, p.title)).collect()
     };
 
-    // Build lock entries for identified JARs
-    let mut mods: Vec<ModEntry> = identified
+    // Build lock entries; jars Modrinth doesn't know are listed by filename
+    let mut mods: Vec<ModEntry> = hashes
         .iter()
-        .filter_map(|(hash, version)| {
-            let path = hash_to_path.get(hash)?;
+        .filter_map(|(path, hash)| {
             let filename = path.file_name()?.to_string_lossy().to_string();
-            let name = project_titles
-                .get(&version.project_id)
-                .cloned()
-                .unwrap_or_else(|| version.project_id.clone());
-            Some(ModEntry {
-                name,
-                modrinth_project_id: version.project_id.clone(),
-                modrinth_version_id: version.id.clone(),
-                version_number: version.version_number.clone(),
-                filename,
-                sha512: hash.clone(),
+            let disabled = filename.ends_with(DISABLED_SUFFIX);
+            Some(match identified.get(hash) {
+                Some(version) => ModEntry {
+                    name: project_titles
+                        .get(&version.project_id)
+                        .cloned()
+                        .unwrap_or_else(|| version.project_id.clone()),
+                    modrinth_project_id: version.project_id.clone(),
+                    modrinth_version_id: version.id.clone(),
+                    version_number: version.version_number.clone(),
+                    filename,
+                    sha512: hash.clone(),
+                    disabled,
+                },
+                None => ModEntry {
+                    name: filename.trim_end_matches(DISABLED_SUFFIX).trim_end_matches(".jar").to_string(),
+                    modrinth_project_id: String::new(),
+                    modrinth_version_id: String::new(),
+                    version_number: String::new(),
+                    filename,
+                    sha512: hash.clone(),
+                    disabled,
+                },
             })
         })
         .collect();
@@ -216,13 +240,15 @@ pub async fn check_updates(
     mc_version: &str,
     loader: &str,
 ) -> Result<Vec<ModUpdate>, String> {
-    if lock.mods.is_empty() {
+    // Disabled mods and jars Modrinth doesn't know are left alone
+    let checkable: Vec<&ModEntry> = lock.mods.iter().filter(|m| m.on_modrinth() && !m.disabled).collect();
+    if checkable.is_empty() {
         return Ok(Vec::new());
     }
 
     let hash_to_mod: HashMap<&str, &ModEntry> =
-        lock.mods.iter().map(|m| (m.sha512.as_str(), m)).collect();
-    let hashes: Vec<&str> = lock.mods.iter().map(|m| m.sha512.as_str()).collect();
+        checkable.iter().map(|m| (m.sha512.as_str(), *m)).collect();
+    let hashes: Vec<&str> = checkable.iter().map(|m| m.sha512.as_str()).collect();
 
     let body = serde_json::json!({
         "hashes": hashes,
@@ -444,6 +470,7 @@ pub async fn add_mod(
             version_number: version.version_number,
             filename: file.filename.clone(),
             sha512: actual,
+            disabled: false,
         };
 
         lock.mods.retain(|m| m.modrinth_project_id != pid);
@@ -488,6 +515,54 @@ pub async fn add_mod(
 }
 
 // ── Apply a single mod update ─────────────────────────────────────────────────
+
+// ── Enable / disable / remove ─────────────────────────────────────────────────
+
+fn find_mod<'a>(lock: &'a mut ModLock, filename: &str) -> Result<&'a mut ModEntry, String> {
+    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+        return Err("Invalid filename".to_string());
+    }
+    lock.mods
+        .iter_mut()
+        .find(|m| m.filename == filename)
+        .ok_or_else(|| format!("Mod '{}' not found — try scanning mods again", filename))
+}
+
+/// Renames `X.jar` ⇄ `X.jar.disabled`. Takes effect the next time the server starts.
+pub fn set_mod_enabled(server_path: &Path, instance_dir: &Path, filename: &str, enabled: bool) -> Result<ModLock, String> {
+    let mut lock = read_lock(instance_dir);
+    let entry = find_mod(&mut lock, filename)?;
+    if entry.disabled != enabled {
+        return Ok(lock); // already in the requested state
+    }
+    let new_name = if enabled {
+        filename.trim_end_matches(DISABLED_SUFFIX).to_string()
+    } else {
+        format!("{}{}", filename, DISABLED_SUFFIX)
+    };
+    let mods_dir = server_path.join("mods");
+    fs::rename(mods_dir.join(filename), mods_dir.join(&new_name))
+        .map_err(|e| format!("Failed to rename {}: {}", filename, e))?;
+    entry.filename = new_name;
+    entry.disabled = !enabled;
+    write_lock(instance_dir, &lock)?;
+    Ok(lock)
+}
+
+/// Deletes the mod's jar. Takes effect the next time the server starts.
+pub fn remove_mod(server_path: &Path, instance_dir: &Path, filename: &str) -> Result<ModLock, String> {
+    let mut lock = read_lock(instance_dir);
+    find_mod(&mut lock, filename)?;
+    let path = server_path.join("mods").join(filename);
+    match fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("Failed to delete {}: {}", filename, e)),
+    }
+    lock.mods.retain(|m| m.filename != filename);
+    write_lock(instance_dir, &lock)?;
+    Ok(lock)
+}
 
 pub async fn apply_update(
     client: &reqwest::Client,

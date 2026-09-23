@@ -386,10 +386,15 @@ async fn mods(ctx: Context<'_>) -> Result<(), Error> {
     if !mod_lock.mods.is_empty() {
         lines.push_str(&format!("── Mods ({}) ──\n", mod_lock.mods.len()));
         for m in &mod_lock.mods {
-            lines.push_str(&format!(
-                "{} v{} — https://modrinth.com/mod/{}\n",
-                m.name, m.version_number, m.modrinth_project_id
-            ));
+            let disabled = if m.disabled { " (disabled)" } else { "" };
+            if m.on_modrinth() {
+                lines.push_str(&format!(
+                    "{} v{}{} — https://modrinth.com/mod/{}\n",
+                    m.name, m.version_number, disabled, m.modrinth_project_id
+                ));
+            } else {
+                lines.push_str(&format!("{}{} — not on Modrinth\n", m.filename, disabled));
+            }
         }
     }
 

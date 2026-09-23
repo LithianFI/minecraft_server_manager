@@ -379,6 +379,44 @@ pub async fn scan_mods(
     Ok(Json(lock.mods))
 }
 
+async fn change_mod(
+    state: &AppState,
+    id: &str,
+    change: impl FnOnce(&std::path::Path, &std::path::Path) -> Result<mod_mgr::ModLock, String>,
+) -> ApiResult<Json<Vec<ModEntry>>> {
+    let (server_path, instance_dir) = {
+        let instances = state.instances.read().await;
+        let inst = instances
+            .get(id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+        (inst.config.server.path.clone(), inst.instance_dir.clone())
+    };
+    change(&server_path, &instance_dir)
+        .map(|lock| Json(lock.mods))
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))
+}
+
+pub async fn enable_mod(
+    State(state): State<Arc<AppState>>,
+    Path((id, filename)): Path<(String, String)>,
+) -> ApiResult<Json<Vec<ModEntry>>> {
+    change_mod(&state, &id, |sp, idir| mod_mgr::set_mod_enabled(sp, idir, &filename, true)).await
+}
+
+pub async fn disable_mod(
+    State(state): State<Arc<AppState>>,
+    Path((id, filename)): Path<(String, String)>,
+) -> ApiResult<Json<Vec<ModEntry>>> {
+    change_mod(&state, &id, |sp, idir| mod_mgr::set_mod_enabled(sp, idir, &filename, false)).await
+}
+
+pub async fn remove_mod(
+    State(state): State<Arc<AppState>>,
+    Path((id, filename)): Path<(String, String)>,
+) -> ApiResult<Json<Vec<ModEntry>>> {
+    change_mod(&state, &id, |sp, idir| mod_mgr::remove_mod(sp, idir, &filename)).await
+}
+
 pub async fn get_mod_updates(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
