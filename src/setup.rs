@@ -320,14 +320,13 @@ pub async fn update_server_version(
         return;
     }
 
-    // A Minecraft upgrade converts the world and can't be undone
-    let mc_changed = minecraft_version != old_mc;
-    if mc_changed {
-        send_log(format!("Minecraft {} → {} can't be undone — backing up first…", old_mc, minecraft_version));
-        match crate::backup::do_create_backup(&state, &instance_id).await {
-            Ok(info) => send_log(format!("Backup saved: {}", info.filename)),
-            Err(e) => { send_fail(format!("Backup failed, update cancelled: {}", e)); return; }
-        }
+    // Full backup first, so the update (loader files, and the world if Minecraft changes)
+    // can be rolled back from the Backups tab
+    send_log("Taking a full backup before changing anything…".to_string());
+    let label = format!("Before updating to {} {} (MC {})", loader_name(&loader), loader_version, minecraft_version);
+    match crate::backup::do_create_update_backup(&state, &instance_id, label).await {
+        Ok(info) => send_log(format!("Backup saved: {} — roll back from the Backups tab if the update misbehaves", info.filename)),
+        Err(e) => { send_fail(format!("Backup failed, update cancelled: {}", e)); return; }
     }
 
     let id_clone = instance_id.clone();

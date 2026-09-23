@@ -175,6 +175,14 @@ function handleEvent(ev) {
       onUpdateFailed(ev.instance_id, ev.error)
       break
 
+    case 'instance_updated': {
+      const inst = ev.instance
+      instances.set(inst.id, inst)
+      updateCard(inst)
+      if (detailId === inst.id) refreshDetail(inst)
+      break
+    }
+
     case 'instance_added': {
       instances.set(ev.instance.id, ev.instance)
       logs.set(ev.instance.id, [])
@@ -1191,15 +1199,20 @@ function backupRowHTML(b) {
         <button class="btn-icon" title="Copy" onclick="doCopyBackup('${name}', '${enc}')">⧉</button>
       </span>`
     : ''
-  return `<div class="backup-row" id="backup-row-${enc}">
+  const kind = b.world_only === true ? 'World only' : b.world_only === false ? 'Full' : null
+  const restoreBtn = b.pinned
+    ? `<button class="btn-outline btn-sm btn-restore btn-rollback" title="Restore the server to exactly how it was before the update" onclick="doRestore('${name}')">↺ Roll back</button>`
+    : `<button class="btn-icon btn-restore" title="Restore" onclick="doRestore('${name}')">↺</button>`
+  return `<div class="backup-row ${b.pinned ? 'backup-pinned' : ''}" id="backup-row-${enc}">
     <div class="backup-info">
+      ${b.label ? `<span class="backup-label">${esc(b.label)}</span>` : ''}
       <span class="backup-filename">${name}</span>
-      <span class="backup-meta">${fmtSize(b.size_bytes)} &middot; ${fmtDate(b.created_at)}</span>
+      <span class="backup-meta">${fmtSize(b.size_bytes)} &middot; ${fmtDate(b.created_at)}${kind ? ` &middot; ${kind}` : ''}${b.pinned ? ' &middot; <span class="backup-kept" title="Pre-update backups are kept outside the normal rotation (newest 3)">kept</span>' : ''}</span>
     </div>
     <div class="backup-actions">
       ${copyControl}
       <a class="btn-icon" title="Download" href="/api/instances/${esc(detailId)}/backups/${enc}/download" download="${name}">⬇</a>
-      <button class="btn-icon btn-restore" title="Restore" onclick="doRestore('${name}')">↺</button>
+      ${restoreBtn}
       <button class="btn-icon btn-danger" title="Delete" onclick="doDeleteBackup('${name}', '${enc}')">✕</button>
     </div>
   </div>`
@@ -1255,12 +1268,20 @@ async function doCreateBackup() {
 
 async function doRestore(filename) {
   if (!detailId) return
-  if (!confirm(`Restore "${filename}"?\n\nThis overwrites all server files with the backup contents. The instance must be stopped first.`)) return
+  const b = (backups.get(detailId) ?? []).find(x => x.filename === filename)
+  const what = b?.label ? `${b.label} (${filename})` : filename
+  const scope = b?.world_only
+    ? 'The world folders are replaced with the backup\'s — world changes made since then are lost. Mods and configs are left alone.'
+    : 'The server folder is made to match the backup exactly: mods, configs, the loader and the world. Anything added or changed since — including world progress — is discarded. MSM\'s version, loader and Java settings are put back too.'
+  if (!confirm(`Roll back to ${what}?\n\n${scope}\n\nThe server must be stopped.`)) return
   const btns = document.querySelectorAll('.btn-restore')
   btns.forEach(b => b.disabled = true)
   try {
-    await api('POST', `/api/instances/${detailId}/backups/${encodeURIComponent(filename)}/restore`)
-    setBackupMsg('Restore complete.', 'success')
+    const res = await api('POST', `/api/instances/${detailId}/backups/${encodeURIComponent(filename)}/restore`)
+    const settings = res.settings_restored
+      ? ' Version, loader and Java settings restored.'
+      : res.full ? ' This older backup didn\'t record MSM\'s version settings — check them in Settings.' : ''
+    setBackupMsg(`Restored ${res.full ? 'the whole server' : 'the world'} from ${filename}.${settings}`, 'success')
   } catch (e) {
     setBackupMsg('Restore failed: ' + e.message, 'error')
   } finally {
@@ -3092,6 +3113,7 @@ function onUpdateDone(instanceId) {
   document.getElementById('update-progress-msg').textContent = 'Update complete!'
   document.getElementById('btn-update-close').classList.remove('hidden')
   appendUpdateLog('✓ Version updated successfully.')
+  appendUpdateLog('If something is wrong after starting the server, use "Roll back" on the pre-update backup in the Backups tab.')
 }
 
 function onUpdateFailed(instanceId, error) {

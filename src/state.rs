@@ -156,6 +156,9 @@ pub enum WsEvent {
     SetupFailed {
         error: String,
     },
+    InstanceUpdated {
+        instance: InstanceInfo,
+    },
     InstanceAdded {
         instance: InstanceInfo,
     },

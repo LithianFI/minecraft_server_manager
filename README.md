@@ -22,7 +22,8 @@ A self-hosted Minecraft server manager built in Rust. Runs a local web dashboard
 - zstd-compressed tar archives
 - Configurable retention (keep N most recent backups)
 - World-only or full-server backup
-- Restore from any listed backup
+- Restore from any listed backup — the server is made to match the backup exactly (files added since are removed), and MSM's version/loader/Java settings are put back too
+- Every modpack or loader update first takes a full, labelled backup that's kept outside the normal rotation (newest 3), with a one-click **Roll back** in the Backups tab
 
 ### Mods & modpacks
 - Scans installed mods and checks Modrinth for updates

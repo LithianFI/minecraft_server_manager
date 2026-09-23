@@ -400,7 +400,7 @@ async fn do_update_modpack(
     }
 
     log("Downloading the installed and the new modpack version…");
-    let (_, old_bytes, old_index) = fetch_pack(state, &old_version_id).await?;
+    let (old_version, old_bytes, old_index) = fetch_pack(state, &old_version_id).await?;
     let (new_version, new_bytes, new_index) = fetch_pack(state, new_version_id).await?;
     if new_version.project_id != project_id {
         return Err("That version belongs to a different modpack.".to_string());
@@ -420,9 +420,10 @@ async fn do_update_modpack(
     ));
 
     log("Taking a full backup before changing anything…");
-    let backup = crate::backup::do_create_full_backup(state, instance_id).await
+    let label = format!("Before updating {} from {} to {}", new_index.name, old_version.version_number, new_version.version_number);
+    let backup = crate::backup::do_create_update_backup(state, instance_id, label).await
         .map_err(|e| format!("Backup failed, update cancelled: {}", e))?;
-    log(&format!("Backup saved: {}", backup.filename));
+    log(&format!("Backup saved: {} — roll back from the Backups tab if the update misbehaves", backup.filename));
 
     // Files the old version shipped that the new one doesn't: pack files by path, plus mods
     // that came in the overrides folder (configs from old overrides are left alone)

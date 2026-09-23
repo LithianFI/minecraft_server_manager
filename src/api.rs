@@ -283,10 +283,10 @@ pub async fn create_backup(
 pub async fn restore_backup(
     State(state): State<Arc<AppState>>,
     Path((id, filename)): Path<(String, String)>,
-) -> ApiResult<StatusCode> {
+) -> ApiResult<Json<backup::RestoreOutcome>> {
     backup::restore_backup(&state, &id, &filename)
         .await
-        .map(|_| StatusCode::NO_CONTENT)
+        .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))
 }
 
