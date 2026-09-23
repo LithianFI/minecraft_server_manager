@@ -14,7 +14,7 @@ A self-hosted Minecraft server manager built in Rust. Runs a local web dashboard
 - Real-time console log with level filtering (All / Info / Warn / Error) and free-text search
 - Live player list, TPS, and RAM metrics
 - Server properties editor (preserves comments and ordering in `server.properties`)
-- Setup wizard for new instances (downloads and runs NeoForge installer)
+- Setup wizard for new instances — pick NeoForge, Forge or Fabric, then choose the Minecraft and loader versions from dropdowns
 
 ### Backups
 - zstd-compressed tar archives
@@ -100,7 +100,7 @@ channel_id = 123456789012345678
 
 ### Adding a server instance
 
-**Option A — Setup wizard:** open the dashboard and click **New Instance**. The wizard downloads NeoForge and runs the installer.
+**Option A — Setup wizard:** open the dashboard and click **Create Server**. Pick a loader and versions; the server is installed to `~/.local/share/msm/servers/<name>/` unless you enter a different directory.
 
 **Option B — Auto-discovery:** copy an existing NeoForge server folder into `~/.local/share/msm/instances/`. The manager will detect it on the next scan (within 30 seconds) and generate an `msm.toml` from `run.sh` and `server.properties` automatically.
 
@@ -144,3 +144,67 @@ warning_secs  = 300
 ```
 
 The dashboard opens in your browser automatically. Logs go to stdout.
+
+## Docker
+
+The image bundles Java 8, 17, 21 and 25 (Temurin) so modpacks for any Minecraft version can run. Java 21 is the default; MSM picks the right one automatically for Modrinth/FTB imports, and you can choose any of them per instance in **Settings**.
+
+```bash
+docker compose up -d --build
+```
+
+Then open `http://localhost:8080`.
+
+- **Data:** everything lives in the `msm-data` volume, mounted at `/data`. MSM's data directory is `/data/msm` (config, instances, backups). When creating a server with the setup wizard, use a directory under `/data`, e.g. `/data/msm/servers/survival`.
+- **Config:** put `config.toml` (Discord bot, web port) at `/data/msm/config.toml`, e.g. `docker compose cp config.toml msm:/data/msm/config.toml` then restart.
+- **Ports:** `8080` is the dashboard; each Minecraft instance's port must also be published. Add a line under `ports:` for every port your instances use.
+- **Stopping:** on `docker stop` / `docker compose down`, MSM stops any running server with `stop` so the world is saved. The compose file allows 2 minutes for this (`stop_grace_period`); with plain `docker run`, pass `--stop-timeout 120`.
+- **Bind mount instead of a volume:** the container runs as UID 1000, so the host directory must be writable by it: `mkdir data && sudo chown 1000:1000 data`, then use `./data:/data`.
+
+## Homepage integration
+
+MSM exposes `GET /api/homepage` for [Homepage](https://gethomepage.dev)'s `customapi` widget:
+
+```json
+{
+  "status": "running",
+  "server": "Survival SMP",
+  "minecraft_version": "1.21.1",
+  "players": 3,
+  "tps": 19.98,
+  "ram_mb": 6144,
+  "cpu_pct": 12.5,
+  "uptime_secs": 7260,
+  "instances": [{ "name": "Survival SMP", "status": "running" }]
+}
+```
+
+`status` is `starting`, `running`, `stopping` or `offline`; the other active-server fields are `null` when nothing is running.
+
+**Docker labels:** the included `docker-compose.yml` already carries Homepage labels. If Homepage has [Docker discovery](https://gethomepage.dev/configs/docker/) enabled and shares a Docker network with MSM, the service appears automatically. Adjust `homepage.href` to the URL you open the dashboard at.
+
+**services.yaml:** or add it manually:
+
+```yaml
+- Games:
+    - Minecraft:
+        icon: minecraft.png
+        href: http://your-host:8080
+        description: Minecraft Server Manager
+        widget:
+          type: customapi
+          url: http://your-host:8080/api/homepage
+          mappings:
+            - field: status
+              label: Status
+            - field: players
+              label: Players
+            - field: tps
+              label: TPS
+              format: float
+            - field: uptime_secs
+              label: Uptime
+              format: duration
+```
+
+To list every instance and its status instead, use `display: dynamic-list` with `mappings: { items: instances, name: name, label: status }`.

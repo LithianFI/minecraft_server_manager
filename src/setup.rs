@@ -1,6 +1,8 @@
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 use crate::state::{AppState, InstanceStatus, WsEvent};
@@ -105,9 +107,116 @@ pub(crate) fn run_installer_blocking(
     }
 }
 
+// ── Available versions ─────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct McVersionEntry {
+    pub minecraft: String,
+    /// Loader versions for this Minecraft version, newest first.
+    pub loaders: Vec<String>,
+}
+
+/// List Minecraft versions (newest first) with their available loader versions.
+pub async fn list_versions(client: &reqwest::Client, loader: &str) -> Result<Vec<McVersionEntry>, String> {
+    match loader {
+        "neoforge" => neoforge_versions(client).await,
+        "forge"    => forge_versions(client).await,
+        "fabric"   => fabric_versions(client).await,
+        other      => Err(format!("Unknown loader '{}'", other)),
+    }
+}
+
+async fn get_json<T: DeserializeOwned>(client: &reqwest::Client, url: &str) -> Result<T, String> {
+    client
+        .get(url)
+        .header("User-Agent", "msm/0.1")
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| format!("Failed to fetch {}: {}", url, e))?
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse {}: {}", url, e))
+}
+
+fn push_grouped(out: &mut Vec<McVersionEntry>, minecraft: String, loader_version: String) {
+    match out.iter_mut().find(|e| e.minecraft == minecraft) {
+        Some(e) => e.loaders.push(loader_version),
+        None => out.push(McVersionEntry { minecraft, loaders: vec![loader_version] }),
+    }
+}
+
+async fn neoforge_versions(client: &reqwest::Client) -> Result<Vec<McVersionEntry>, String> {
+    #[derive(Deserialize)]
+    struct Resp { versions: Vec<String> }
+
+    let resp: Resp = get_json(
+        client,
+        "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge",
+    ).await?;
+
+    let mut out = Vec::new();
+    // Listed oldest first; skip snapshot/alpha builds and April-fools versions (e.g. "0.25w14craftmine")
+    for v in resp.versions.into_iter().rev() {
+        let major_ok = v.split('.').next().and_then(|s| s.parse::<u32>().ok()).is_some_and(|m| m >= 20);
+        if !major_ok || v.contains("alpha") || v.contains('+') { continue; }
+        push_grouped(&mut out, neoforge_to_mc(&v), v);
+    }
+    Ok(out)
+}
+
+async fn forge_versions(client: &reqwest::Client) -> Result<Vec<McVersionEntry>, String> {
+    let meta: std::collections::HashMap<String, Vec<String>> = get_json(
+        client,
+        "https://files.minecraftforge.net/net/minecraftforge/forge/maven-metadata.json",
+    ).await?;
+
+    let mut out: Vec<McVersionEntry> = meta
+        .into_iter()
+        // Forge only generates run.sh (which MSM launches) from 1.17 onwards
+        .filter(|(mc, _)| version_key(mc) >= vec![1, 17])
+        .map(|(mc, versions)| {
+            let prefix = format!("{}-", mc);
+            let loaders = versions.iter().rev()
+                .map(|v| v.strip_prefix(&prefix).unwrap_or(v).to_string())
+                .collect();
+            McVersionEntry { minecraft: mc, loaders }
+        })
+        .collect();
+    out.sort_by(|a, b| version_key(&b.minecraft).cmp(&version_key(&a.minecraft)));
+    Ok(out)
+}
+
+async fn fabric_versions(client: &reqwest::Client) -> Result<Vec<McVersionEntry>, String> {
+    #[derive(Deserialize)]
+    struct Entry { version: String, stable: bool }
+
+    let games: Vec<Entry> = get_json(client, "https://meta.fabricmc.net/v2/versions/game").await?;
+    let loaders: Vec<Entry> = get_json(client, "https://meta.fabricmc.net/v2/versions/loader").await?;
+    let loaders: Vec<String> = loaders.into_iter().map(|l| l.version).collect();
+
+    // Both lists are already newest first; any loader works with any game version
+    Ok(games
+        .into_iter()
+        .filter(|g| g.stable)
+        .map(|g| McVersionEntry { minecraft: g.version, loaders: loaders.clone() })
+        .collect())
+}
+
+/// Numeric components of a version string, for ordering ("1.20.1" → [1, 20, 1]).
+fn version_key(v: &str) -> Vec<u32> {
+    v.split('.').map(|p| p.parse().unwrap_or(0)).collect()
+}
+
 // ── Initial server setup ───────────────────────────────────────────────────────
 
-pub async fn install_neoforge(state: Arc<AppState>, version: String, server_path: String) {
+pub async fn install_server(
+    state: Arc<AppState>,
+    loader: String,
+    minecraft_version: String,
+    loader_version: String,
+    server_path: String,
+) {
     let path = PathBuf::from(&server_path);
 
     let _ = state.log_tx.send(WsEvent::SetupLog {
@@ -123,7 +232,18 @@ pub async fn install_neoforge(state: Arc<AppState>, version: String, server_path
     let make_log: Arc<dyn Fn(String) -> WsEvent + Send + Sync + 'static> =
         Arc::new(|msg| WsEvent::SetupLog { message: msg });
 
-    match download_and_run_installer(&state, &version, &path, make_log).await {
+    let result = match loader.as_str() {
+        "neoforge" => download_and_run_installer(&state, &loader_version, &path, make_log).await,
+        "forge" => {
+            crate::modpack::install_forge(&state, &minecraft_version, &loader_version, &path, make_log).await
+        }
+        "fabric" => {
+            crate::modpack::install_fabric(&state, &minecraft_version, &loader_version, &path, make_log).await
+        }
+        other => Err(format!("Unknown loader '{}'", other)),
+    };
+
+    match result {
         Ok(()) => {
             let _ = state.log_tx.send(WsEvent::SetupLog {
                 message: "Installation complete.".to_string(),
@@ -207,6 +327,14 @@ pub async fn update_server_version(
 
 fn neoforge_to_mc(nf: &str) -> String {
     let parts: Vec<&str> = nf.split('.').collect();
+    // Year-based versions: "26.1.2.x" → MC 26.1.2, "26.2.0.x" → MC 26.2
+    if parts.len() >= 4 && parts[0].parse::<u32>().is_ok_and(|m| m >= 26) {
+        return if parts[2] == "0" {
+            format!("{}.{}", parts[0], parts[1])
+        } else {
+            format!("{}.{}.{}", parts[0], parts[1], parts[2])
+        };
+    }
     if parts.len() >= 2 {
         let minor: u32 = parts[1].parse().unwrap_or(1);
         if minor == 0 {

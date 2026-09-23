@@ -133,7 +133,8 @@ async fn main() {
         .route("/api/bans/ips/{ip}", axum::routing::delete(api::unban_ip))
         .route("/api/instances/{id}/properties", get(api::get_properties).post(api::set_properties))
         .route("/api/instances/{id}/restart-config", post(api::update_restart_config))
-        .route("/api/setup/install-neoforge", post(api::install_neoforge))
+        .route("/api/setup/versions", get(api::get_loader_versions))
+        .route("/api/setup/install-server", post(api::install_server))
         .route("/api/setup/import-modpack", post(api::import_modpack))
         .route("/api/java/installs", get(api::get_java_installs))
         .route("/api/instances/{id}/java-config", post(api::set_java_config))
@@ -149,6 +150,7 @@ async fn main() {
         .route("/api/instances/{id}/players/{player}/op",   post(api::op_player))
         .route("/api/instances/{id}/players/{player}/deop", post(api::deop_player))
         .route("/api/instances/{id}/backup-config", get(api::get_backup_config).post(api::update_backup_config))
+        .route("/api/homepage", get(api::homepage_summary))
         .route("/api/discord-notify", get(api::get_discord_notify).post(api::update_discord_notify))
         .with_state(state.clone())
         .layer(CorsLayer::permissive());
@@ -182,7 +184,48 @@ async fn main() {
     });
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    // Not axum's graceful shutdown: it would wait forever on open SSE (/events) streams
+    tokio::select! {
+        r = axum::serve(listener, app) => r.unwrap(),
+        _ = shutdown_signal(state.clone()) => {}
+    }
+}
+
+/// Waits for Ctrl+C / SIGTERM (e.g. `docker stop`), then stops any running server
+/// so the world is saved before MSM exits.
+async fn shutdown_signal(state: Arc<AppState>) {
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("failed to install SIGTERM handler");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = sigterm.recv() => {}
+    }
+
+    use state::InstanceStatus::{Running, Starting, Stopping};
+
+    let running: Vec<String> = state.instances.read().await
+        .iter()
+        .filter(|(_, i)| matches!(i.status, Starting | Running))
+        .map(|(id, _)| id.clone())
+        .collect();
+    if running.is_empty() {
+        return;
+    }
+
+    tracing::info!("Shutdown requested — stopping running server(s) before exit…");
+    for id in &running {
+        let _ = instance::stop_instance(state.clone(), id).await;
+    }
+
+    let stopped = tokio::time::timeout(tokio::time::Duration::from_secs(90), async {
+        while state.instances.read().await.values().any(|i| matches!(i.status, Starting | Running | Stopping)) {
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        }
+    })
+    .await;
+    if stopped.is_err() {
+        tracing::warn!("Timed out waiting for server(s) to stop; exiting anyway");
+    }
 }
 
 fn start_instance_watcher(state: Arc<AppState>) {

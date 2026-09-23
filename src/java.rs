@@ -53,8 +53,10 @@ pub fn list_java_installs() -> Vec<JavaInstall> {
 /// Returns the recommended Java major version for a Minecraft version string ("1.X.Y").
 pub fn recommended_java(mc_version: &str) -> u32 {
     let mut parts = mc_version.split('.');
-    // Skip the leading "1"
-    let _ = parts.next();
+    // Year-based versions (26.1+) require Java 25; otherwise skip the leading "1"
+    if parts.next() != Some("1") {
+        return 25;
+    }
     let minor: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(21);
     let patch: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
 

@@ -400,22 +400,36 @@
         <div class="setup-form-body">
           <div class="field">
             <label for="setup-name">Display Name</label>
-            <input id="setup-name" type="text" placeholder="Survival SMP" required>
+            <input id="setup-name" type="text" placeholder="Survival SMP" required oninput="updateSetupDirHint()">
           </div>
           <div class="field">
-            <label for="setup-dir">Server Directory</label>
-            <input id="setup-dir" type="text" placeholder="/home/user/servers/survival" required>
-            <span class="field-hint">Directory will be created if it doesn't exist</span>
+            <label for="setup-dir">Server Directory <span class="field-label-opt">(optional)</span></label>
+            <input id="setup-dir" type="text" placeholder="Leave blank to use default location"
+                   oninput="updateSetupDirHint()">
+            <span id="setup-dir-hint" class="field-hint"></span>
           </div>
           <div class="field-row">
             <div class="field">
-              <label for="setup-nf-ver">NeoForge Version</label>
-              <input id="setup-nf-ver" type="text" placeholder="21.1.172" required oninput="updateMcPreview()">
-              <span id="setup-mc-preview" class="field-hint"></span>
+              <label for="setup-loader">Mod Loader</label>
+              <select id="setup-loader" class="prop-select" onchange="loadSetupVersions()">
+                <option value="neoforge">NeoForge</option>
+                <option value="forge">Forge</option>
+                <option value="fabric">Fabric</option>
+              </select>
             </div>
             <div class="field">
               <label for="setup-port">Port</label>
               <input id="setup-port" type="number" value="25565" min="1" max="65535" required>
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="setup-mc-ver">Minecraft Version</label>
+              <select id="setup-mc-ver" class="prop-select" required onchange="renderSetupLoaderVersions()"></select>
+            </div>
+            <div class="field">
+              <label for="setup-loader-ver" id="setup-loader-ver-label">Loader Version</label>
+              <select id="setup-loader-ver" class="prop-select" required></select>
             </div>
           </div>
           <div id="setup-error" class="error-msg hidden"></div>

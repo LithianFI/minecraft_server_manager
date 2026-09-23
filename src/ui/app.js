@@ -327,7 +327,7 @@ function cardActionsHTML(inst, running) {
   if (isRunning) {
     primary = `<button class="btn-stop" onclick="doStop('${inst.id}')" ${isBusy ? 'disabled' : ''}>Stop</button>`
   } else if (canSwitch) {
-    primary = `<button class="btn-switch" onclick="doSwitch('${inst.id}')">Switch To</button>`
+    primary = `<button class="btn-switch" onclick="doStart('${inst.id}')">Switch To</button>`
   } else if (canStart) {
     primary = `<button class="btn-start" onclick="doStart('${inst.id}')" ${running ? 'disabled' : ''}>Start</button>`
   }
@@ -428,8 +428,9 @@ function refreshMetricsBar(inst) {
 function detailStart() {
   if (!detailId) return
   setDetailError('')
-  document.getElementById('btn-detail-start').disabled = true
-  doStart(detailId)
+  const btn = document.getElementById('btn-detail-start')
+  btn.disabled = true
+  doStart(detailId).then(started => { if (!started) btn.disabled = false })
 }
 
 function detailStop() {
@@ -1447,11 +1448,17 @@ async function submitAddDatapack() {
 let _setupServerPath = null
 let _setupName       = null
 let _setupPort       = 25565
+let _setupLoader     = null
+let _setupMcVer      = null
+let _setupLoaderVer  = null
+const _setupVersions = {}  // loader → [{ minecraft, loaders: [...] }], newest first
+
+const LOADER_NAMES = { neoforge: 'NeoForge', forge: 'Forge', fabric: 'Fabric' }
 
 function openSetupModal() {
   document.getElementById('setup-form').reset()
   document.getElementById('setup-error').classList.add('hidden')
-  document.getElementById('setup-mc-preview').textContent = ''
+  document.getElementById('setup-dir-hint').textContent = ''
   document.getElementById('setup-step-1').classList.remove('hidden')
   document.getElementById('setup-step-2').classList.add('hidden')
   document.getElementById('setup-log-output').innerHTML = ''
@@ -1462,6 +1469,58 @@ function openSetupModal() {
   document.getElementById('btn-setup-submit').textContent = 'Download & Install'
   _setupServerPath = null
   document.getElementById('setup-modal-backdrop').classList.remove('hidden')
+  loadSetupVersions()
+}
+
+async function loadSetupVersions() {
+  const loader  = document.getElementById('setup-loader').value
+  const mcSel   = document.getElementById('setup-mc-ver')
+  const verSel  = document.getElementById('setup-loader-ver')
+  const errorEl = document.getElementById('setup-error')
+  document.getElementById('setup-loader-ver-label').textContent = `${LOADER_NAMES[loader]} Version`
+  errorEl.classList.add('hidden')
+
+  if (!_setupVersions[loader]) {
+    mcSel.innerHTML  = '<option value="">Loading…</option>'
+    verSel.innerHTML = '<option value="">Loading…</option>'
+    mcSel.disabled = verSel.disabled = true
+    try {
+      _setupVersions[loader] = await api('GET', `/api/setup/versions?loader=${loader}`)
+    } catch (err) {
+      mcSel.innerHTML = verSel.innerHTML = ''
+      errorEl.textContent = `Failed to load ${LOADER_NAMES[loader]} versions: ${err.message}`
+      errorEl.classList.remove('hidden')
+      return
+    }
+    // The user may have switched loader while this was loading
+    if (document.getElementById('setup-loader').value !== loader) return
+  }
+
+  const entries = _setupVersions[loader]
+  mcSel.innerHTML = entries.map(e => `<option value="${esc(e.minecraft)}">${esc(e.minecraft)}</option>`).join('')
+  // Default to the newest Minecraft version that has a non-beta loader build
+  const preferred = entries.find(e => e.loaders.some(v => !v.includes('beta'))) ?? entries[0]
+  if (preferred) mcSel.value = preferred.minecraft
+  mcSel.disabled = verSel.disabled = false
+  renderSetupLoaderVersions()
+}
+
+function renderSetupLoaderVersions() {
+  const loader = document.getElementById('setup-loader').value
+  const mc     = document.getElementById('setup-mc-ver').value
+  const verSel = document.getElementById('setup-loader-ver')
+  const entry  = (_setupVersions[loader] ?? []).find(e => e.minecraft === mc)
+  const vers   = entry?.loaders ?? []
+  verSel.innerHTML = vers.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('')
+  const stable = vers.find(v => !v.includes('beta'))
+  if (stable) verSel.value = stable
+}
+
+function updateSetupDirHint() {
+  const name = document.getElementById('setup-name').value.trim()
+  const dir  = document.getElementById('setup-dir').value.trim()
+  document.getElementById('setup-dir-hint').textContent =
+    dir || !name ? '' : `Default: ~/.local/share/msm/servers/${slugify(name)}/`
 }
 
 function closeSetupModal() {
@@ -1470,12 +1529,6 @@ function closeSetupModal() {
 
 function setupBackdropClose(e) {
   if (e.target === e.currentTarget) closeSetupModal()
-}
-
-function updateMcPreview() {
-  const ver = document.getElementById('setup-nf-ver').value.trim()
-  const mc  = neoForgeToMcVersion(ver)
-  document.getElementById('setup-mc-preview').textContent = mc ? `MC ${mc}` : ''
 }
 
 function neoForgeToMcVersion(nfVer) {
@@ -1496,15 +1549,23 @@ async function submitSetup(e) {
   _setupName       = document.getElementById('setup-name').value.trim()
   _setupServerPath = document.getElementById('setup-dir').value.trim()
   _setupPort       = parseInt(document.getElementById('setup-port').value, 10)
-  const nfVer      = document.getElementById('setup-nf-ver').value.trim()
+  _setupLoader     = document.getElementById('setup-loader').value
+  _setupMcVer      = document.getElementById('setup-mc-ver').value
+  _setupLoaderVer  = document.getElementById('setup-loader-ver').value
 
   // Switch to progress view
   document.getElementById('setup-step-1').classList.add('hidden')
   document.getElementById('setup-step-2').classList.remove('hidden')
-  document.getElementById('setup-progress-msg').textContent = 'Installing NeoForge…'
+  document.getElementById('setup-progress-msg').textContent = `Installing ${LOADER_NAMES[_setupLoader]}…`
 
   try {
-    await api('POST', '/api/setup/install-neoforge', { version: nfVer, server_path: _setupServerPath })
+    await api('POST', '/api/setup/install-server', {
+      loader:            _setupLoader,
+      minecraft_version: _setupMcVer,
+      loader_version:    _setupLoaderVer,
+      server_path:       _setupServerPath,
+      instance_name:     _setupName,
+    })
     // Progress comes via SSE — wait for setup_done / setup_failed events
   } catch (err) {
     onSetupFailed(err.message)
@@ -1542,14 +1603,14 @@ async function finishSetup() {
   const btn = document.getElementById('btn-setup-done')
   btn.disabled = true
   btn.textContent = 'Adding…'
-  const mcVer = neoForgeToMcVersion(document.getElementById('setup-nf-ver').value.trim()) ||
-                document.getElementById('setup-nf-ver').value.trim()
   try {
     const inst = await api('POST', '/api/instances', {
       id:                slugify(_setupName),
       display_name:      _setupName,
       server_path:       _setupServerPath,
-      minecraft_version: mcVer,
+      minecraft_version: _setupMcVer,
+      loader:            _setupLoader,
+      loader_version:    _setupLoaderVer,
       port:              _setupPort,
     })
     instances.set(inst.id, inst)
@@ -2988,13 +3049,27 @@ async function deleteSchedule(name) {
 }
 
 // ─── Action helpers ───────────────────────────────────────────────────────────
+// Starts an instance. If another one is running, asks first and then switches:
+// the running instance is stopped gracefully before this one starts.
+// Returns false if the user cancelled.
 async function doStart(id) {
+  const running = [...instances.values()].find(i => i.id !== id && (i.status === 'running' || i.status === 'starting'))
+  if (running) {
+    const target  = instances.get(id)
+    const players = running.players?.length
+      ? `\n\n${running.players.length} player(s) online: ${running.players.join(', ')}`
+      : ''
+    const msg = `"${running.display_name || running.id}" is currently running.${players}\n\n` +
+                `Stop it and start "${target?.display_name || id}"?`
+    if (!confirm(msg)) return false
+  }
   try {
-    await api('POST', `/api/instances/${id}/start`)
+    await api('POST', `/api/instances/${id}/${running ? 'switch' : 'start'}`)
   } catch (err) {
     showCardError(id, err.message)
     if (detailId === id) setDetailError(err.message)
   }
+  return true
 }
 
 async function doStop(id) {
@@ -3008,19 +3083,6 @@ async function doStop(id) {
   } catch (err) {
     showCardError(id, err.message)
     if (detailId === id) setDetailError(err.message)
-  }
-}
-
-async function doSwitch(id) {
-  const running = [...instances.values()].find(i => i.status === 'running' || i.status === 'starting')
-  if (running?.players?.length) {
-    const names = running.players.join(', ')
-    if (!confirm(`${running.players.length} player(s) online on "${running.display_name || running.id}": ${names}\n\nSwitch server anyway?`)) return
-  }
-  try {
-    await api('POST', `/api/instances/${id}/switch`)
-  } catch (err) {
-    showCardError(id, err.message)
   }
 }
 

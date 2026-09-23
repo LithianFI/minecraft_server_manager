@@ -31,6 +31,61 @@ fn err(code: StatusCode, msg: impl ToString) -> (StatusCode, Json<ApiError>) {
     (code, Json(ApiError { error: msg.to_string() }))
 }
 
+// ── Homepage (gethomepage.dev) ─────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct HomepageInstance {
+    pub name: String,
+    pub status: InstanceStatus,
+}
+
+/// Flat summary for Homepage's `customapi` widget.
+#[derive(Serialize)]
+pub struct HomepageSummary {
+    /// Status of the active instance, or "offline" when none is running
+    pub status: String,
+    pub server: Option<String>,
+    pub minecraft_version: Option<String>,
+    pub players: usize,
+    pub tps: Option<f32>,
+    pub ram_mb: Option<u64>,
+    pub cpu_pct: Option<f32>,
+    pub uptime_secs: Option<i64>,
+    pub instances: Vec<HomepageInstance>,
+}
+
+pub async fn homepage_summary(State(state): State<Arc<AppState>>) -> Json<HomepageSummary> {
+    let instances = state.instances.read().await;
+    let mut all: Vec<InstanceInfo> = instances.values().map(InstanceInfo::from).collect();
+    all.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+
+    let active = all.iter().find(|i| {
+        matches!(i.status, InstanceStatus::Starting | InstanceStatus::Running | InstanceStatus::Stopping)
+    });
+    let status = match active.map(|i| &i.status) {
+        Some(InstanceStatus::Starting) => "starting",
+        Some(InstanceStatus::Running)  => "running",
+        Some(InstanceStatus::Stopping) => "stopping",
+        _                              => "offline",
+    };
+    let now = chrono::Utc::now().timestamp();
+
+    Json(HomepageSummary {
+        status: status.to_string(),
+        server: active.map(|i| i.display_name.clone()),
+        minecraft_version: active.map(|i| i.minecraft_version.clone()),
+        players: active.map(|i| i.players.len()).unwrap_or(0),
+        tps: active.and_then(|i| i.tps),
+        ram_mb: active.and_then(|i| i.ram_mb),
+        cpu_pct: active.and_then(|i| i.cpu_pct),
+        uptime_secs: active.and_then(|i| i.started_at).map(|t| now - t),
+        instances: all
+            .iter()
+            .map(|i| HomepageInstance { name: i.display_name.clone(), status: i.status.clone() })
+            .collect(),
+    })
+}
+
 pub async fn list_instances(State(state): State<Arc<AppState>>) -> Json<Vec<InstanceInfo>> {
     let instances = state.instances.read().await;
     let mut infos: Vec<InstanceInfo> = instances.values().map(|s| s.into()).collect();
@@ -103,6 +158,8 @@ pub struct AddInstanceRequest {
     pub minecraft_version: String,
     pub port: u16,
     pub java_path: Option<String>,
+    pub loader: Option<String>,
+    pub loader_version: Option<String>,
 }
 
 pub async fn add_instance(
@@ -144,8 +201,8 @@ pub async fn add_instance(
             name: id.clone(),
             display_name: Some(req.display_name.clone()),
             minecraft_version: req.minecraft_version.clone(),
-            loader: Some("neoforge".to_string()),
-            loader_version: None,
+            loader: Some(req.loader.unwrap_or_else(|| "neoforge".to_string())),
+            loader_version: req.loader_version,
             port: req.port,
             modrinth_project_id: None,
         },
@@ -659,22 +716,73 @@ pub async fn update_server_version(
     Ok(StatusCode::ACCEPTED)
 }
 
-// ── Setup (NeoForge installer) ─────────────────────────────────────────────────
+// ── Setup (loader installer) ───────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct LoaderVersionsQuery {
+    pub loader: String,
+}
+
+pub async fn get_loader_versions(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<LoaderVersionsQuery>,
+) -> ApiResult<Json<Vec<setup::McVersionEntry>>> {
+    setup::list_versions(&state.http_client, &params.loader)
+        .await
+        .map(Json)
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, e))
+}
 
 #[derive(Deserialize)]
 pub struct InstallRequest {
-    pub version: String,
+    pub loader: String,
+    pub minecraft_version: String,
+    pub loader_version: String,
+    #[serde(default)]
     pub server_path: String,
+    pub instance_name: String,
 }
 
-pub async fn install_neoforge(
+pub async fn install_server(
     State(state): State<Arc<AppState>>,
     Json(req): Json<InstallRequest>,
 ) -> ApiResult<StatusCode> {
-    if req.version.trim().is_empty() || req.server_path.trim().is_empty() {
-        return Err(err(StatusCode::BAD_REQUEST, "version and server_path are required"));
+    if !matches!(req.loader.as_str(), "neoforge" | "forge" | "fabric") {
+        return Err(err(StatusCode::BAD_REQUEST, format!("Unknown loader '{}'", req.loader)));
     }
-    tokio::spawn(setup::install_neoforge(state, req.version, req.server_path));
+    if req.minecraft_version.trim().is_empty() || req.loader_version.trim().is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "minecraft_version and loader_version are required"));
+    }
+    let id = slugify(&req.instance_name);
+    if id.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid instance name"));
+    }
+    if state.instances.read().await.contains_key(&id) {
+        return Err(err(StatusCode::CONFLICT, format!("Instance '{}' already exists", id)));
+    }
+
+    // Blank path → same location as imported servers: <data dir>/servers/<id>
+    let server_path = if req.server_path.trim().is_empty() {
+        let dir = data_dir().join("servers").join(&id);
+        let in_use = std::fs::read_dir(&dir).map(|mut d| d.next().is_some()).unwrap_or(false);
+        if in_use {
+            return Err(err(
+                StatusCode::CONFLICT,
+                format!("{} already exists and is not empty", dir.display()),
+            ));
+        }
+        dir.to_string_lossy().into_owned()
+    } else {
+        req.server_path
+    };
+
+    tokio::spawn(setup::install_server(
+        state,
+        req.loader,
+        req.minecraft_version,
+        req.loader_version,
+        server_path,
+    ));
     Ok(StatusCode::ACCEPTED)
 }
 
