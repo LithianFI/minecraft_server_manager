@@ -1791,11 +1791,14 @@ pub async fn update_discord_notify(
         let mut cfg = state.discord_notify.write().await;
         *cfg = body.clone();
     }
-    // Persist to config.toml if Discord is configured
-    let mut gc = state.global_config.clone();
-    if let Some(ref mut dc) = gc.discord {
-        dc.notify = body;
-        if let Err(e) = gc.save() {
+    // Persist to config.toml if Discord is configured. Re-read the file rather than saving the
+    // in-memory config, which also holds values from environment variables.
+    if state.global_config.discord_bot().is_some() {
+        let saved = crate::config::GlobalConfig::load().and_then(|mut file_cfg| {
+            file_cfg.discord.get_or_insert_with(Default::default).notify = body;
+            file_cfg.save().map_err(|e| e.to_string())
+        });
+        if let Err(e) = saved {
             tracing::warn!("Failed to save discord notify config: {}", e);
         }
     }

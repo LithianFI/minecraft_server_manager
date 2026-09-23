@@ -12,6 +12,13 @@ services:
       - "25565:25565"   # Minecraft — add a line for each other port your instances use
     volumes:
       - msm-data:/data
+    environment:
+      # Optional — these override /data/msm/config.toml (see README → Environment variables)
+      # MSM_WEB_PASSWORD: "a long random password"
+      # MSM_API_TOKEN: "read-only token for Homepage"
+      # MSM_DISCORD_TOKEN: "bot token"
+      # MSM_DISCORD_GUILD_ID: "123456789012345678"
+      # MSM_DISCORD_CHANNEL_ID: "123456789012345678"
     labels:
       # Homepage (gethomepage.dev) auto-discovery — remove if you don't use it
       - homepage.group=Games

@@ -3,20 +3,28 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::fs;
 
+// Unknown keys are errors here: a misspelt `pasword` must not silently leave the dashboard open
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct GlobalConfig {
     pub discord: Option<DiscordConfig>,
     pub web: Option<WebConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct DiscordConfig {
+    // Credentials may come from MSM_DISCORD_* environment variables instead of the file
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub token: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub guild_id: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub channel_id: u64,
     #[serde(default)]
     pub notify: DiscordNotifyConfig,
 }
+
+fn is_zero(n: &u64) -> bool { *n == 0 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DiscordNotifyConfig {
@@ -50,7 +58,8 @@ impl Default for DiscordNotifyConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct WebConfig {
     pub port: Option<u16>,
     /// Dashboard password; when unset the dashboard is open to anyone who can reach it
@@ -100,6 +109,59 @@ pub struct ScheduleEntry {
 }
 
 fn default_true() -> bool { true }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |name| pairs.iter().find(|(k, _)| *k == name).map(|(_, v)| v.to_string())
+    }
+
+    #[test]
+    fn env_overrides_file() {
+        let mut cfg: GlobalConfig = toml::from_str("[web]\nport = 7331\npassword = \"from-file\"\n").unwrap();
+        cfg.apply_env(env(&[("MSM_WEB_PASSWORD", "from-env"), ("MSM_API_TOKEN", "tok")])).unwrap();
+        let web = cfg.web.unwrap();
+        assert_eq!(web.port, Some(7331));
+        assert_eq!(web.password.as_deref(), Some("from-env"));
+        assert_eq!(web.api_token.as_deref(), Some("tok"));
+    }
+
+    #[test]
+    fn discord_from_env_keeps_file_notify_settings() {
+        let mut cfg: GlobalConfig = toml::from_str("[discord.notify]\nbackup_done = false\n").unwrap();
+        assert!(cfg.discord_bot().is_none(), "no credentials yet");
+        cfg.apply_env(env(&[
+            ("MSM_DISCORD_TOKEN", "abc"),
+            ("MSM_DISCORD_GUILD_ID", "123"),
+            ("MSM_DISCORD_CHANNEL_ID", "456"),
+        ])).unwrap();
+        let d = cfg.discord_bot().expect("bot configured");
+        assert_eq!((d.token.as_str(), d.guild_id, d.channel_id), ("abc", 123, 456));
+        assert!(!d.notify.backup_done);
+    }
+
+    #[test]
+    fn rejects_misspelt_web_keys() {
+        assert!(toml::from_str::<GlobalConfig>("[web]\npasword = \"x\"\n").is_err());
+        assert!(toml::from_str::<GlobalConfig>("[wbe]\npassword = \"x\"\n").is_err());
+    }
+
+    #[test]
+    fn rejects_bad_numbers() {
+        let mut cfg = GlobalConfig::default();
+        assert!(cfg.apply_env(env(&[("MSM_WEB_PORT", "eighty")])).is_err());
+        assert!(cfg.apply_env(env(&[("MSM_WEB_PORT", "70000")])).is_err());
+    }
+
+    #[test]
+    fn file_credentials_are_not_serialized_when_empty() {
+        let cfg = GlobalConfig { discord: Some(DiscordConfig::default()), web: None };
+        let out = toml::to_string(&cfg).unwrap();
+        assert!(!out.contains("token") && !out.contains("guild_id"), "{}", out);
+    }
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct RestartConfig {
@@ -154,10 +216,52 @@ pub fn data_dir() -> PathBuf {
 }
 
 impl GlobalConfig {
-    pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
+    /// Reads config.toml only. A missing file is an empty config; an unreadable or invalid one
+    /// is an error, so a typo can't silently switch off settings like the dashboard password.
+    pub fn load() -> Result<Self, String> {
         let path = data_dir().join("config.toml");
-        let content = std::fs::read_to_string(path)?;
-        Ok(toml::from_str(&content)?)
+        match std::fs::read_to_string(&path) {
+            Ok(content) => toml::from_str(&content).map_err(|e| format!("{}: {}", path.display(), e)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(format!("{}: {}", path.display(), e)),
+        }
+    }
+
+    /// config.toml with MSM_* environment variables applied on top. The result is only used in
+    /// memory — never save it, or environment secrets would end up in the file.
+    pub fn load_effective() -> Result<Self, String> {
+        let mut cfg = Self::load()?;
+        cfg.apply_env(|name| std::env::var(name).ok().filter(|v| !v.is_empty()))?;
+        Ok(cfg)
+    }
+
+    fn apply_env(&mut self, var: impl Fn(&str) -> Option<String>) -> Result<(), String> {
+        let number = |name: &str| -> Result<Option<u64>, String> {
+            var(name).map(|v| v.trim().parse().map_err(|_| format!("{} must be a number, got '{}'", name, v))).transpose()
+        };
+
+        let web = self.web.get_or_insert_with(Default::default);
+        if let Some(port) = number("MSM_WEB_PORT")? {
+            web.port = Some(u16::try_from(port).map_err(|_| format!("MSM_WEB_PORT out of range: {}", port))?);
+        }
+        if let Some(v) = var("MSM_WEB_PASSWORD") { web.password = Some(v); }
+        if let Some(v) = var("MSM_API_TOKEN") { web.api_token = Some(v); }
+
+        let token = var("MSM_DISCORD_TOKEN");
+        let guild = number("MSM_DISCORD_GUILD_ID")?;
+        let channel = number("MSM_DISCORD_CHANNEL_ID")?;
+        if token.is_some() || guild.is_some() || channel.is_some() {
+            let d = self.discord.get_or_insert_with(Default::default);
+            if let Some(v) = token { d.token = v; }
+            if let Some(v) = guild { d.guild_id = v; }
+            if let Some(v) = channel { d.channel_id = v; }
+        }
+        Ok(())
+    }
+
+    /// The Discord settings, if the bot has everything it needs to run.
+    pub fn discord_bot(&self) -> Option<&DiscordConfig> {
+        self.discord.as_ref().filter(|d| !d.token.is_empty() && d.guild_id != 0 && d.channel_id != 0)
     }
 
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {

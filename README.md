@@ -96,6 +96,21 @@ The dashboard then shows a login page; sessions last 30 days (or until MSM resta
 
 Requests that change something are always refused when a browser marks them as coming from another website, so other pages you visit can't drive MSM through your browser — with or without a password.
 
+### Environment variables
+
+Every secret and the port can also be set through environment variables, which override `config.toml` (handy for Docker). They are never written back to the file.
+
+| Variable | Overrides |
+|----------|-----------|
+| `MSM_WEB_PORT` | `[web] port` |
+| `MSM_WEB_PASSWORD` | `[web] password` |
+| `MSM_API_TOKEN` | `[web] api_token` |
+| `MSM_DISCORD_TOKEN` | `[discord] token` |
+| `MSM_DISCORD_GUILD_ID` | `[discord] guild_id` |
+| `MSM_DISCORD_CHANNEL_ID` | `[discord] channel_id` |
+
+MSM refuses to start if `config.toml` can't be parsed or contains an unknown key in `[web]`, so a typo can't silently disable the password.
+
 ### Discord bot
 
 Add a `[discord]` section to `config.toml`:
@@ -174,7 +189,7 @@ Then open `http://localhost:8080`. To update: `docker compose pull && docker com
 > **Maintainers:** the image is built by `.github/workflows/docker.yml` on every push to master and on `v*` tags. GitHub creates the package as private on the first push — make it public under the repository's **Packages → Package settings** so `docker compose pull` works without logging in.
 
 - **Data:** everything lives in the `msm-data` volume, mounted at `/data`. MSM's data directory is `/data/msm` (config, instances, backups). When creating a server with the setup wizard, use a directory under `/data`, e.g. `/data/msm/servers/survival`.
-- **Config:** put `config.toml` (Discord bot, web port) at `/data/msm/config.toml`, e.g. `docker compose cp config.toml msm:/data/msm/config.toml` then restart.
+- **Config:** set the [environment variables](#environment-variables) under `environment:` in `docker-compose.yml`, or put a `config.toml` at `/data/msm/config.toml` (`docker compose cp config.toml msm:/data/msm/config.toml`, then restart).
 - **Ports:** `8080` is the dashboard; each Minecraft instance's port must also be published. Add a line under `ports:` for every port your instances use.
 - **Stopping:** on `docker stop` / `docker compose down`, MSM stops any running server with `stop` so the world is saved. MSM waits up to 3 minutes for the save; the compose file allows 3½ minutes (`stop_grace_period`), and with plain `docker run` pass `--stop-timeout 210`.
 - **Bind mount instead of a volume:** the container runs as UID 1000, so the host directory must be writable by it: `mkdir data && sudo chown 1000:1000 data`, then use `./data:/data`.

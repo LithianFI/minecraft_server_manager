@@ -54,7 +54,13 @@ async fn main() {
         )
         .init();
 
-    let global_config = config::GlobalConfig::load().unwrap_or_default();
+    let global_config = match config::GlobalConfig::load_effective() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Invalid configuration — {}", e);
+            std::process::exit(1);
+        }
+    };
     let instances = config::discover_instances().await;
 
     tracing::info!("Discovered {} instance(s)", instances.len());
@@ -184,7 +190,7 @@ async fn main() {
         ban::sync_all(&state, &players, &ips).await;
     }
 
-    if let Some(discord_cfg) = state.global_config.discord.clone() {
+    if let Some(discord_cfg) = state.global_config.discord_bot().cloned() {
         discord::start_bot(state.clone(), discord_cfg);
     }
 
