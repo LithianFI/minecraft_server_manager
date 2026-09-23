@@ -101,7 +101,7 @@ pub fn find_datapacks_dir(server_path: &Path) -> PathBuf {
     server_path.join(level_name).join("datapacks")
 }
 
-fn read_level_name(server_path: &Path) -> Option<String> {
+pub(crate) fn read_level_name(server_path: &Path) -> Option<String> {
     let content = fs::read_to_string(server_path.join("server.properties")).ok()?;
     for line in content.lines() {
         let line = line.trim();

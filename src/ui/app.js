@@ -501,9 +501,141 @@ function switchTab(name) {
   if (name === 'backups'    && detailId) renderBackups()
   if (name === 'mods'       && detailId) renderMods()
   if (name === 'datapacks'  && detailId) renderDatapacks()
+  if (name === 'files'      && detailId) openFilesTab(detailId)
   if (name === 'stats'      && detailId) loadStats(detailId)
   if (name === 'settings' && detailId) { loadSettings(detailId); loadDiskUsage(detailId); loadBackupConfig(detailId); loadAlertsConfig(detailId); loadSchedules(detailId) }
 }
+
+// ─── Files (config editor) ────────────────────────────────────────────────────
+let _filesInstance = null
+let _filesDir      = ''
+let _filesPath     = null
+let _filesOriginal = ''
+
+function filesDirty() {
+  return _filesPath !== null && document.getElementById('files-text').value !== _filesOriginal
+}
+
+function confirmDiscardFile() {
+  return !filesDirty() || confirm(`Discard your unsaved changes to ${_filesPath}?`)
+}
+
+function openFilesTab(id) {
+  if (_filesInstance !== id) {
+    _filesInstance = id
+    _filesDir = ''
+    showFile(null, '')
+  }
+  loadFilesDir(_filesDir)
+}
+
+async function loadFilesDir(dir) {
+  const id = detailId
+  const list = document.getElementById('files-list')
+  list.innerHTML = '<div class="files-empty">Loading…</div>'
+  let entries
+  try {
+    entries = await api('GET', `/api/instances/${id}/files?path=${encodeURIComponent(dir)}`)
+  } catch (e) {
+    list.innerHTML = `<div class="files-empty files-error">${esc(e.message)}</div>`
+    return
+  }
+  if (detailId !== id) return
+  _filesDir = dir
+  renderFilesCrumbs(dir)
+  if (!entries.length) {
+    list.innerHTML = `<div class="files-empty">${dir ? 'This folder is empty.' : 'No config folders found yet — they appear after the server has started once.'}</div>`
+    return
+  }
+  list.innerHTML = entries.map((e, i) => `
+    <button class="files-item ${e.is_dir ? 'is-dir' : ''} ${e.path === _filesPath ? 'active' : ''}" data-i="${i}">
+      <span class="files-icon">${e.is_dir ? '▸' : '·'}</span>
+      <span class="files-name">${esc(e.name)}</span>
+      ${e.is_dir ? '' : `<span class="files-size">${fmtSize(e.size)}</span>`}
+    </button>`).join('')
+  list.querySelectorAll('.files-item').forEach(btn => {
+    const entry = entries[Number(btn.dataset.i)]
+    btn.onclick = () => entry.is_dir ? loadFilesDir(entry.path) : openFile(entry.path)
+  })
+}
+
+function renderFilesCrumbs(dir) {
+  const parts = dir ? dir.split('/') : []
+  const crumbs = [`<button class="files-crumb" data-path="">server</button>`]
+  parts.forEach((p, i) => {
+    crumbs.push(`<button class="files-crumb" data-path="${esc(parts.slice(0, i + 1).join('/'))}">${esc(p)}</button>`)
+  })
+  const nav = document.getElementById('files-crumbs')
+  nav.innerHTML = crumbs.join('<span class="files-crumb-sep">/</span>')
+  nav.querySelectorAll('.files-crumb').forEach(b => { b.onclick = () => loadFilesDir(b.dataset.path) })
+}
+
+async function openFile(path) {
+  if (path === _filesPath || !confirmDiscardFile()) return
+  const id = detailId
+  try {
+    const text = await apiText('GET', `/api/instances/${id}/files/content?path=${encodeURIComponent(path)}`)
+    if (detailId !== id) return
+    showFile(path, text)
+    document.querySelectorAll('#files-list .files-item').forEach(b =>
+      b.classList.toggle('active', b.querySelector('.files-name')?.textContent === path.split('/').pop()))
+  } catch (e) {
+    setFilesMsg(e.message, 'error')
+  }
+}
+
+function showFile(path, text) {
+  _filesPath = path
+  _filesOriginal = text
+  const ta = document.getElementById('files-text')
+  ta.value = text
+  ta.disabled = path === null
+  document.getElementById('files-current').textContent = path ?? 'No file open'
+  document.getElementById('files-msg').classList.add('hidden')
+  onFileEdited()
+}
+
+function onFileEdited() {
+  const dirty = filesDirty()
+  document.getElementById('files-dirty').classList.toggle('hidden', !dirty)
+  document.getElementById('btn-files-save').disabled = !dirty
+  document.getElementById('btn-files-revert').disabled = !dirty
+}
+
+function revertFile() {
+  if (_filesPath !== null && confirmDiscardFile()) showFile(_filesPath, _filesOriginal)
+}
+
+async function saveFile() {
+  if (!filesDirty()) return
+  const btn = document.getElementById('btn-files-save')
+  const text = document.getElementById('files-text').value
+  btn.disabled = true
+  try {
+    await apiText('PUT', `/api/instances/${detailId}/files/content?path=${encodeURIComponent(_filesPath)}`, text)
+    _filesOriginal = text
+    onFileEdited()
+    const running = ['running', 'starting'].includes(instances.get(detailId)?.status)
+    setFilesMsg(running ? 'Saved — restart the server to apply.' : 'Saved.', 'success')
+  } catch (e) {
+    btn.disabled = false
+    setFilesMsg('Save failed: ' + e.message, 'error')
+  }
+}
+
+function setFilesMsg(text, type) {
+  const el = document.getElementById('files-msg')
+  el.textContent = text
+  el.className = 'mods-msg ' + type
+}
+
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's' && document.activeElement?.id === 'files-text') {
+    e.preventDefault()
+    saveFile()
+  }
+})
+window.addEventListener('beforeunload', (e) => { if (filesDirty()) e.preventDefault() })
 
 // ─── Log view ─────────────────────────────────────────────────────────────────
 function linePassesFilter(line) {
@@ -3349,6 +3481,19 @@ async function api(method, path, body) {
   const json = await res.json().catch(() => ({ error: res.statusText }))
   if (!res.ok) throw new Error(json.error ?? res.statusText)
   return json
+}
+
+// Like api(), for endpoints that send or return plain text
+async function apiText(method, path, body) {
+  const opts = { method, headers: {} }
+  if (body !== undefined) { opts.headers['Content-Type'] = 'text/plain; charset=utf-8'; opts.body = body }
+  const res = await fetch(path, opts)
+  if (res.status === 401) { location.href = '/login'; throw new Error('Not logged in') }
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({ error: res.statusText }))
+    throw new Error(json.error ?? res.statusText)
+  }
+  return res.status === 204 ? '' : res.text()
 }
 
 function statusLabel(s) {

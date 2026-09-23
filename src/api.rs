@@ -773,6 +773,61 @@ pub async fn update_server_version(
     Ok(StatusCode::ACCEPTED)
 }
 
+// ── Config file editor ───────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct FilePathQuery {
+    #[serde(default)]
+    pub path: String,
+}
+
+async fn server_path_of(state: &AppState, id: &str) -> ApiResult<std::path::PathBuf> {
+    let instances = state.instances.read().await;
+    instances
+        .get(id)
+        .map(|i| i.config.server.path.clone())
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))
+}
+
+pub async fn list_files(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(q): Query<FilePathQuery>,
+) -> ApiResult<Json<Vec<crate::files::FileEntry>>> {
+    let server_path = server_path_of(&state, &id).await?;
+    tokio::task::spawn_blocking(move || crate::files::list(&server_path, &q.path))
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map(Json)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))
+}
+
+pub async fn read_file(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(q): Query<FilePathQuery>,
+) -> ApiResult<String> {
+    let server_path = server_path_of(&state, &id).await?;
+    tokio::task::spawn_blocking(move || crate::files::read(&server_path, &q.path))
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))
+}
+
+pub async fn write_file(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(q): Query<FilePathQuery>,
+    body: String,
+) -> ApiResult<StatusCode> {
+    let server_path = server_path_of(&state, &id).await?;
+    tokio::task::spawn_blocking(move || crate::files::write(&server_path, &q.path, &body))
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map(|_| StatusCode::NO_CONTENT)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))
+}
+
 // ── Modpack updates ──────────────────────────────────────────────────────────
 
 pub async fn get_modpack_versions(

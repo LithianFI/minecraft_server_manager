@@ -81,6 +81,7 @@
     <button class="tab-btn active" data-tab="logs"     onclick="switchTab('logs')">Logs</button>
     <button class="tab-btn"        data-tab="mods"     onclick="switchTab('mods')">Mods</button>
     <button class="tab-btn"        data-tab="datapacks" onclick="switchTab('datapacks')">Datapacks</button>
+    <button class="tab-btn"        data-tab="files"    onclick="switchTab('files')">Files</button>
     <button class="tab-btn"        data-tab="backups"  onclick="switchTab('backups')">Backups</button>
     <button class="tab-btn"        data-tab="stats"    onclick="switchTab('stats')">Stats</button>
     <button class="tab-btn"        data-tab="settings" onclick="switchTab('settings')">Settings</button>
@@ -133,6 +134,27 @@
       <span id="datapacks-status-msg" class="mods-msg hidden"></span>
     </div>
     <div id="datapack-list"></div>
+  </div>
+
+  <div id="tab-files" class="tab-panel hidden">
+    <div class="files-layout">
+      <aside class="files-browser">
+        <nav id="files-crumbs" class="files-crumbs" aria-label="Folder"></nav>
+        <div id="files-list" class="files-list"></div>
+      </aside>
+      <section class="files-editor">
+        <div class="files-editor-bar">
+          <span id="files-current" class="files-current">No file open</span>
+          <span id="files-dirty" class="files-dirty hidden">unsaved</span>
+          <span id="files-msg" class="mods-msg hidden"></span>
+          <button id="btn-files-revert" class="btn-outline btn-sm" onclick="revertFile()" disabled>Revert</button>
+          <button id="btn-files-save" class="btn-primary btn-sm" onclick="saveFile()" disabled>Save</button>
+        </div>
+        <textarea id="files-text" class="files-text" spellcheck="false" autocomplete="off" disabled
+                  placeholder="Pick a config file on the left to edit it." oninput="onFileEdited()"></textarea>
+        <div class="files-hint">Most mods read their config when the server starts — restart the server to apply changes. <kbd>Ctrl</kbd>+<kbd>S</kbd> saves.</div>
+      </section>
+    </div>
   </div>
 
   <div id="tab-settings" class="tab-panel hidden">

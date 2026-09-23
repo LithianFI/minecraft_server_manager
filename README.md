@@ -14,6 +14,7 @@ A self-hosted Minecraft server manager built in Rust. Runs a local web dashboard
 - Real-time console log with level filtering (All / Info / Warn / Error) and free-text search
 - Live player list, TPS, and RAM metrics
 - Server properties editor (preserves comments and ordering in `server.properties`)
+- Config file editor for `config/`, `defaultconfigs/`, `kubejs/` and the world's `serverconfig/` (text files only; saves are atomic)
 - Setup wizard for new instances — pick NeoForge, Forge or Fabric, then choose the Minecraft and loader versions from dropdowns
 
 ### Backups
