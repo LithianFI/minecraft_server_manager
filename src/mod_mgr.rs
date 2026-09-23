@@ -304,6 +304,8 @@ pub struct ModSearchHit {
     pub description: String,
     pub downloads: u64,
     pub icon_url: Option<String>,
+    /// Modrinth's server support: "required", "optional", "unsupported" (client-only) or "unknown"
+    pub server_side: String,
 }
 
 #[derive(Deserialize)]
@@ -319,6 +321,8 @@ struct MrSearchHit {
     description: String,
     downloads: u64,
     icon_url: Option<String>,
+    #[serde(default)]
+    server_side: String,
 }
 
 pub async fn search_mods(
@@ -355,6 +359,7 @@ pub async fn search_mods(
         description: h.description,
         downloads: h.downloads,
         icon_url: h.icon_url,
+        server_side: h.server_side,
     }).collect())
 }
 

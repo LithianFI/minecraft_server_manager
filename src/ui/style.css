@@ -700,6 +700,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   margin-left: 6px;
   display: inline-block; /* not struck through with the disabled name */
 }
+.mod-tag-warn { color: var(--amber); border-color: rgba(245,158,11,.4); }
 .mod-row.mod-disabled .mod-name,
 .mod-row.mod-disabled .mod-version { color: var(--text-muted); text-decoration: line-through; text-decoration-color: var(--border-hi); }
 

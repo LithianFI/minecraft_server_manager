@@ -2095,9 +2095,11 @@ async function searchModrinthMods() {
         : hit.downloads >= 1000
           ? `${Math.round(hit.downloads / 1000)}k`
           : String(hit.downloads)
+      const clientOnly = hit.server_side === 'unsupported'
+        ? ' <span class="mod-tag mod-tag-warn">client-only</span>' : ''
       return `
         <div class="ftb-result-item" onclick="selectAddModHit(${i})">
-          <div class="ftb-result-name">${esc(hit.title)} <span class="mod-dl-count">${dl} downloads</span></div>
+          <div class="ftb-result-name">${esc(hit.title)}${clientOnly} <span class="mod-dl-count">${dl} downloads</span></div>
           <div class="ftb-result-desc">${esc(hit.description)}</div>
         </div>`
     }).join('')
@@ -2122,6 +2124,7 @@ async function selectAddModHit(index) {
   errEl.classList.add('hidden')
   document.getElementById('add-mod-title').textContent = _addModSelectedHit.title
   document.getElementById('add-mod-desc').textContent = _addModSelectedHit.description
+  document.getElementById('add-mod-client-warning').classList.toggle('hidden', _addModSelectedHit.server_side !== 'unsupported')
   document.getElementById('add-mod-selected').classList.remove('hidden')
   document.getElementById('btn-add-mod-submit').disabled = true
 
@@ -2165,6 +2168,8 @@ async function submitAddMod() {
   if (!detailId || !_addModSelectedHit) return
   const versionId = document.getElementById('add-mod-version').value
   if (!versionId) return
+  if (_addModSelectedHit.server_side === 'unsupported' &&
+      !confirm(`${_addModSelectedHit.title} is marked client-only on Modrinth. Servers usually crash on startup with client-only mods installed.\n\nAdd it anyway?`)) return
 
   const btn = document.getElementById('btn-add-mod-submit')
   const errEl = document.getElementById('add-mod-error')
