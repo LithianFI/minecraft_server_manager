@@ -245,6 +245,7 @@ async fn do_import(state: &Arc<AppState>, req: FtbImportRequest) -> Result<(), S
         low_tps_streak: 0,
         high_ram_alerted: false,
         last_deaths: std::collections::HashMap::new(),
+        last_crash: None,
     };
 
     let info = crate::state::InstanceInfo::from(&inst_state);

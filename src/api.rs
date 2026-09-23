@@ -243,6 +243,7 @@ pub async fn add_instance(
         low_tps_streak: 0,
         high_ram_alerted: false,
         last_deaths: std::collections::HashMap::new(),
+        last_crash: None,
     };
 
     let info = InstanceInfo::from(&inst_state);
@@ -415,6 +416,22 @@ pub async fn remove_mod(
     Path((id, filename)): Path<(String, String)>,
 ) -> ApiResult<Json<Vec<ModEntry>>> {
     change_mod(&state, &id, |sp, idir| mod_mgr::remove_mod(sp, idir, &filename)).await
+}
+
+pub async fn get_crash_report(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<String> {
+    let (server_path, file) = {
+        let instances = state.instances.read().await;
+        let inst = instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+        let file = inst.last_crash.as_ref().and_then(|c| c.report_file.clone());
+        (inst.config.server.path.clone(), file)
+    };
+    let file = file.ok_or_else(|| err(StatusCode::NOT_FOUND, "No crash report for the last crash"))?;
+    crate::crash::read_report(&server_path, &file).map_err(|e| err(StatusCode::NOT_FOUND, e))
 }
 
 pub async fn get_mod_updates(

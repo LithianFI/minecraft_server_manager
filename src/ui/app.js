@@ -91,6 +91,15 @@ function handleEvent(ev) {
       break
     }
 
+    case 'crash_detected':
+    case 'crash_cleared': {
+      const inst = instances.get(ev.instance_id)
+      if (!inst) break
+      inst.last_crash = ev.type === 'crash_detected' ? ev.summary : null
+      if (detailId === ev.instance_id) refreshCrashPanel(inst)
+      break
+    }
+
     case 'player_joined': {
       const inst = instances.get(ev.instance_id)
       if (!inst || inst.players.includes(ev.player)) break
@@ -372,6 +381,30 @@ function refreshDetail(inst) {
 
   refreshPlayerBar(inst)
   refreshMetricsBar(inst)
+  refreshCrashPanel(inst)
+}
+
+function refreshCrashPanel(inst) {
+  const panel = document.getElementById('crash-panel')
+  const c = inst?.last_crash
+  panel.classList.toggle('hidden', !c)
+  if (!c) return
+  const when = new Date(c.time * 1000).toLocaleString()
+  const rows = [
+    c.description    && `<div class="crash-desc">${esc(c.description)}</div>`,
+    c.exception      && `<code class="crash-exception">${esc(c.exception)}</code>`,
+    c.suspected_mods && `<div class="crash-suspects"><span>Suspected mods</span> ${esc(c.suspected_mods)}</div>`,
+  ].filter(Boolean).join('')
+  const report = c.report_file
+    ? `<a class="btn-outline btn-sm crash-report-link" href="/api/instances/${encodeURIComponent(inst.id)}/crash-report" target="_blank" rel="noopener">View report</a>`
+    : `<span class="crash-no-report">No crash report was written — see the console log</span>`
+  panel.innerHTML = `
+    <div class="crash-head">
+      <span class="crash-title">Last crash</span>
+      <span class="crash-time">${esc(when)}</span>
+      ${report}
+    </div>
+    ${rows}`
 }
 
 async function playerAction(instanceId, player, action) {

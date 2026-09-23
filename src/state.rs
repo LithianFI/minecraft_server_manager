@@ -49,6 +49,8 @@ pub struct InstanceState {
     pub low_tps_streak: u32,
     pub high_ram_alerted: bool,
     pub last_deaths: HashMap<String, DeathInfo>,
+    /// Summary of the last crash; cleared when the server is next started by hand
+    pub last_crash: Option<crate::crash::CrashSummary>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -67,6 +69,7 @@ pub struct InstanceInfo {
     pub tps: Option<f32>,
     pub cpu_pct: Option<f32>,
     pub java_path: Option<String>,
+    pub last_crash: Option<crate::crash::CrashSummary>,
 }
 
 impl From<&InstanceState> for InstanceInfo {
@@ -91,6 +94,7 @@ impl From<&InstanceState> for InstanceInfo {
             tps: s.tps,
             cpu_pct: s.cpu_pct,
             java_path: s.config.server.java_path.clone(),
+            last_crash: s.last_crash.clone(),
         }
     }
 }
@@ -182,6 +186,13 @@ pub enum WsEvent {
         instance_id: String,
         kind: String,
         message: String,
+    },
+    CrashDetected {
+        instance_id: String,
+        summary: crate::crash::CrashSummary,
+    },
+    CrashCleared {
+        instance_id: String,
     },
     ModsInstalled {
         instance_id: String,

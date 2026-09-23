@@ -3,6 +3,7 @@ mod auth;
 mod backup;
 mod ban;
 mod config;
+mod crash;
 mod discord;
 mod ftb;
 mod instance;
@@ -133,6 +134,7 @@ async fn main() {
         .route("/api/instances/{id}/datapacks/update-all", post(api::update_all_datapacks))
         .route("/api/instances/{id}/datapacks/{project_id}/update", post(api::update_single_datapack))
         .route("/api/instances/{id}/update-version", post(api::update_server_version))
+        .route("/api/instances/{id}/crash-report", get(api::get_crash_report))
         .route("/api/whitelist", get(api::get_whitelist).post(api::add_to_whitelist))
         .route("/api/whitelist/{name}", axum::routing::delete(api::remove_from_whitelist))
         .route("/api/bans/players", get(api::get_banned_players).post(api::ban_player))

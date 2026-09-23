@@ -67,6 +67,9 @@ pub async fn start_instance(state: Arc<AppState>, instance_id: &str) -> Result<(
             inst.started_at = Some(chrono::Utc::now());
             inst.players.clear();
             inst.log_buffer.clear();
+            if inst.last_crash.take().is_some() {
+                let _ = state.log_tx.send(WsEvent::CrashCleared { instance_id: instance_id.to_string() });
+            }
         }
     }
 
@@ -257,9 +260,30 @@ async fn run_instance_task(
         _ => InstanceStatus::Crashed,
     };
 
+    // Find out why it crashed before the run's state is reset
+    let crash = if final_status == InstanceStatus::Crashed {
+        let (since, log_lines) = {
+            let instances = state.instances.read().await;
+            instances.get(&instance_id).map(|i| {
+                let since = i.started_at.map(|t| t.timestamp()).unwrap_or(0);
+                let lines: Vec<String> = i.log_buffer.iter().rev().take(200).rev().map(|l| l.line.clone()).collect();
+                (since, lines)
+            }).unwrap_or_default()
+        };
+        let path = server_path.clone();
+        tokio::task::spawn_blocking(move || crate::crash::summarize(&path, since, &log_lines))
+            .await
+            .ok()
+    } else {
+        None
+    };
+
     {
         let mut instances = state.instances.write().await;
         if let Some(inst) = instances.get_mut(&instance_id) {
+            if crash.is_some() {
+                inst.last_crash = crash.clone();
+            }
             inst.status = final_status.clone();
             inst.players.clear();
             inst.started_at = None;
@@ -275,6 +299,9 @@ async fn run_instance_task(
         instance_id: instance_id.clone(),
         status: final_status.clone(),
     });
+    if let Some(summary) = crash {
+        let _ = state.log_tx.send(WsEvent::CrashDetected { instance_id: instance_id.clone(), summary });
+    }
 
     let exit_event = match final_status {
         InstanceStatus::Crashed => "crashed",

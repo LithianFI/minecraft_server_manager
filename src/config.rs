@@ -246,6 +246,7 @@ pub async fn load_instance_dir(path: &std::path::Path) -> Option<(String, crate:
             low_tps_streak: 0,
             high_ram_alerted: false,
             last_deaths: std::collections::HashMap::new(),
+            last_crash: None,
         },
     ))
 }

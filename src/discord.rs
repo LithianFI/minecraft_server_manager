@@ -593,10 +593,25 @@ async fn notify_task(
                             Some(format!("🟢 **{}** is now running.", instance_id)),
                         InstanceStatus::Stopped if cfg.server_stopped =>
                             Some(format!("⚫ **{}** has stopped.", instance_id)),
-                        InstanceStatus::Crashed if cfg.server_crashed =>
-                            Some(format!("🔴 **{}** has crashed!", instance_id)),
+                        // Crashes are announced by CrashDetected, which carries the details
                         _ => None,
                     },
+                    WsEvent::CrashDetected { instance_id, summary } if cfg.server_crashed => {
+                        let mut msg = format!("🔴 **{}** has crashed!", instance_id);
+                        for (label, value) in [
+                            ("", &summary.description),
+                            ("", &summary.exception),
+                            ("Suspected mods: ", &summary.suspected_mods),
+                        ] {
+                            if let Some(v) = value {
+                                msg.push_str(&format!("\n> {}{}", label, v));
+                            }
+                        }
+                        if let Some(file) = &summary.report_file {
+                            msg.push_str(&format!("\nFull report: `crash-reports/{}`", file));
+                        }
+                        Some(msg)
+                    }
                     WsEvent::BackupDone { instance_id, filename, size_bytes } if cfg.backup_done => {
                         let mb = *size_bytes as f64 / 1_048_576.0;
                         Some(format!("💾 Backup of **{}** done — `{}` ({:.1} MB)", instance_id, filename, mb))
