@@ -209,6 +209,7 @@ async fn do_import(state: &Arc<AppState>, req: FtbImportRequest) -> Result<(), S
             loader_version,
             port: req.port,
             modrinth_project_id: None,
+            modrinth_version_id: None,
         },
         server: crate::config::ServerConfig {
             path: server_path,

@@ -527,18 +527,38 @@
       <form id="update-form" onsubmit="submitUpdate(event)">
         <div class="setup-form-body">
           <div class="update-current-ver" id="update-current-ver"></div>
-          <div class="field-row">
-            <div class="field">
-              <label for="update-mc-ver">Minecraft Version</label>
-              <select id="update-mc-ver" class="prop-select" required onchange="renderUpdateLoaderVersions()"></select>
+          <div id="update-mode" class="update-mode hidden" role="tablist">
+            <button type="button" data-mode="pack" onclick="setUpdateMode('pack')">Modpack version</button>
+            <button type="button" data-mode="loader" onclick="setUpdateMode('loader')">Loader only</button>
+          </div>
+          <div id="update-pack-section" class="hidden">
+            <div class="field hidden" id="update-pack-installed-field">
+              <label for="update-pack-installed">Currently Installed Version</label>
+              <select id="update-pack-installed" class="prop-select" onchange="renderUpdatePackChoices()"></select>
+              <span class="field-hint">This pack was imported before MSM recorded versions — pick the one you have.</span>
             </div>
             <div class="field">
-              <label for="update-loader-ver" id="update-loader-ver-label">New Loader Version</label>
-              <select id="update-loader-ver" class="prop-select" required></select>
+              <label for="update-pack-version">New Modpack Version</label>
+              <select id="update-pack-version" class="prop-select"></select>
+            </div>
+            <div class="update-warning">
+              ⚠ MSM takes a full backup, then replaces the pack's mods and config files with the new version's. Mods you added yourself are kept; changes you made to the pack's own config files are overwritten (they're in the backup).
             </div>
           </div>
-          <div id="update-mc-note" class="update-warning hidden">
-            ⚠ Upgrading Minecraft converts the world and can't be undone. MSM takes a full backup before installing. Every mod must also support the new version.
+          <div id="update-loader-section">
+            <div class="field-row">
+              <div class="field">
+                <label for="update-mc-ver">Minecraft Version</label>
+                <select id="update-mc-ver" class="prop-select" onchange="renderUpdateLoaderVersions()"></select>
+              </div>
+              <div class="field">
+                <label for="update-loader-ver" id="update-loader-ver-label">New Loader Version</label>
+                <select id="update-loader-ver" class="prop-select"></select>
+              </div>
+            </div>
+            <div id="update-mc-note" class="update-warning hidden">
+              ⚠ Upgrading Minecraft converts the world and can't be undone. MSM takes a backup before installing. Every mod must also support the new version.
+            </div>
           </div>
           <div class="update-warning">
             ⚠ The server must be stopped before updating. Mods may require a matching loader version — verify compatibility before starting.

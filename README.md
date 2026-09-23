@@ -22,9 +22,11 @@ A self-hosted Minecraft server manager built in Rust. Runs a local web dashboard
 - World-only or full-server backup
 - Restore from any listed backup
 
-### Mods
+### Mods & modpacks
 - Scans installed mods and checks Modrinth for updates
 - One-click update for individual mods or all at once
+- Add mods from Modrinth (with a warning for client-only mods); disable, re-enable or remove any mod
+- Update an imported Modrinth modpack to a newer version: full backup first, stale pack files removed, your own mods kept
 
 ### Whitelist & Bans
 - Global whitelist synced across all server instances

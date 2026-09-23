@@ -1286,6 +1286,22 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   line-height: 1.6;
 }
 
+.update-mode {
+  display: inline-flex;
+  align-self: flex-start;
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+.update-mode button {
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: 0;
+  padding: 6px 14px;
+}
+.update-mode button + button { border-left: 1px solid var(--border-hi); }
+.update-mode button.active { background: var(--green-dim); color: var(--green); }
+
 .btn-sm { font-size: 12px; padding: 5px 12px; }
 
 /* ── Toast notifications ─────────────────────────────────────────── */

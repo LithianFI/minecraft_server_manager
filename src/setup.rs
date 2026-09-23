@@ -210,7 +210,7 @@ pub(crate) fn version_key(v: &str) -> Vec<u32> {
 
 // ── Initial server setup ───────────────────────────────────────────────────────
 
-fn loader_name(loader: &str) -> &str {
+pub(crate) fn loader_name(loader: &str) -> &str {
     match loader {
         "neoforge" => "NeoForge",
         "forge"    => "Forge",
@@ -220,7 +220,7 @@ fn loader_name(loader: &str) -> &str {
 }
 
 /// Downloads and runs the installer for `loader` in `server_path`.
-async fn run_loader_installer(
+pub(crate) async fn run_loader_installer(
     state: &Arc<AppState>,
     loader: &str,
     minecraft_version: &str,

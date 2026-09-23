@@ -70,6 +70,8 @@ pub struct InstanceInfo {
     pub cpu_pct: Option<f32>,
     pub java_path: Option<String>,
     pub last_crash: Option<crate::crash::CrashSummary>,
+    pub modrinth_project_id: Option<String>,
+    pub modrinth_version_id: Option<String>,
 }
 
 impl From<&InstanceState> for InstanceInfo {
@@ -95,6 +97,8 @@ impl From<&InstanceState> for InstanceInfo {
             cpu_pct: s.cpu_pct,
             java_path: s.config.server.java_path.clone(),
             last_crash: s.last_crash.clone(),
+            modrinth_project_id: s.config.instance.modrinth_project_id.clone(),
+            modrinth_version_id: s.config.instance.modrinth_version_id.clone(),
         }
     }
 }

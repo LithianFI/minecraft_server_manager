@@ -76,6 +76,15 @@ pub async fn trigger_backup(state: Arc<AppState>, instance_id: String) {
 }
 
 pub async fn do_create_backup(state: &AppState, instance_id: &str) -> Result<BackupInfo, String> {
+    create_backup(state, instance_id, false).await
+}
+
+/// Backs up the whole server directory, ignoring the instance's world-only setting.
+pub async fn do_create_full_backup(state: &AppState, instance_id: &str) -> Result<BackupInfo, String> {
+    create_backup(state, instance_id, true).await
+}
+
+async fn create_backup(state: &AppState, instance_id: &str, force_full: bool) -> Result<BackupInfo, String> {
     let (server_path, world_only, keep_count, running) = {
         let instances = state.instances.read().await;
         let inst = instances
@@ -84,7 +93,7 @@ pub async fn do_create_backup(state: &AppState, instance_id: &str) -> Result<Bac
         let backup = &inst.config.backup;
         (
             inst.config.server.path.clone(),
-            backup.as_ref().map(|b| b.world_only).unwrap_or(false),
+            !force_full && backup.as_ref().map(|b| b.world_only).unwrap_or(false),
             backup.as_ref().map(|b| b.keep_count).unwrap_or(10),
             inst.status == InstanceStatus::Running,
         )

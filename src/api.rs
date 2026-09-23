@@ -205,6 +205,7 @@ pub async fn add_instance(
             loader_version: req.loader_version,
             port: req.port,
             modrinth_project_id: None,
+            modrinth_version_id: None,
         },
         server: ServerConfig {
             path: server_path.clone(),
@@ -769,6 +770,48 @@ pub async fn update_server_version(
         return Err(err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)));
     }
     tokio::spawn(setup::update_server_version(state, id, req.minecraft_version, req.loader_version));
+    Ok(StatusCode::ACCEPTED)
+}
+
+// ── Modpack updates ──────────────────────────────────────────────────────────
+
+pub async fn get_modpack_versions(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<modpack::PackVersions>> {
+    let (project_id, installed) = {
+        let instances = state.instances.read().await;
+        let inst = instances
+            .get(&id)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
+        let meta = &inst.config.instance;
+        let project_id = meta.modrinth_project_id.clone().ok_or_else(|| {
+            err(StatusCode::BAD_REQUEST, "This instance wasn't imported from a Modrinth modpack")
+        })?;
+        (project_id, meta.modrinth_version_id.clone())
+    };
+    modpack::list_pack_versions(&state.http_client, &project_id, installed)
+        .await
+        .map(Json)
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, e))
+}
+
+#[derive(Deserialize)]
+pub struct UpdateModpackRequest {
+    pub version_id: String,
+    /// Needed only for packs imported before MSM recorded the installed version
+    pub installed_version_id: Option<String>,
+}
+
+pub async fn update_modpack(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateModpackRequest>,
+) -> ApiResult<StatusCode> {
+    if !state.instances.read().await.contains_key(&id) {
+        return Err(err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)));
+    }
+    tokio::spawn(modpack::update_modpack(state, id, req.version_id, req.installed_version_id));
     Ok(StatusCode::ACCEPTED)
 }
 

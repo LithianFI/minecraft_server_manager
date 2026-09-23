@@ -190,6 +190,9 @@ pub struct InstanceMeta {
     pub port: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modrinth_project_id: Option<String>,
+    /// Installed modpack version; unknown for packs imported before this was recorded
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modrinth_version_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -389,6 +392,7 @@ fn auto_detect_config(dir: &std::path::Path) -> Option<InstanceConfig> {
             loader_version,
             port,
             modrinth_project_id: None,
+            modrinth_version_id: None,
         },
         server: ServerConfig {
             path: dir.to_path_buf(),

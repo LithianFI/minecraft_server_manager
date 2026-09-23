@@ -2671,12 +2671,18 @@ async function openUpdateModal() {
   document.getElementById('update-loader-ver-label').textContent = `New ${name} Version`
   document.getElementById('update-modal-backdrop').classList.remove('hidden')
 
+  // Instances imported from a Modrinth modpack update the whole pack by default
+  const isPack = !!inst?.modrinth_project_id
+  document.getElementById('update-mode').classList.toggle('hidden', !isPack)
+  setUpdateMode(isPack ? 'pack' : 'loader')
+  if (isPack) loadUpdatePackVersions(id)
+
   const mcSel  = document.getElementById('update-mc-ver')
   const verSel = document.getElementById('update-loader-ver')
   const btn    = document.getElementById('btn-update-submit')
   const showError = (msg) => {
     mcSel.innerHTML = verSel.innerHTML = ''
-    btn.disabled = true
+    btn.disabled = !isPack  // a modpack can still be updated as a whole
     const errorEl = document.getElementById('update-error')
     errorEl.textContent = msg
     errorEl.classList.remove('hidden')
@@ -2701,6 +2707,67 @@ async function openUpdateModal() {
   fillSelect(mcSel, choices.map(e => e.minecraft))
   if (choices.some(e => e.minecraft === inst.minecraft_version)) mcSel.value = inst.minecraft_version
   renderUpdateLoaderVersions()
+}
+
+let _updateMode = 'loader'
+let _updatePack = null  // { title, installed_version_id, versions }
+
+function setUpdateMode(mode) {
+  _updateMode = mode
+  document.querySelectorAll('#update-mode button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode))
+  document.getElementById('update-pack-section').classList.toggle('hidden', mode !== 'pack')
+  document.getElementById('update-loader-section').classList.toggle('hidden', mode !== 'loader')
+}
+
+async function loadUpdatePackVersions(id) {
+  const newSel = document.getElementById('update-pack-version')
+  const oldSel = document.getElementById('update-pack-installed')
+  setSelectLoading(newSel)
+  _updatePack = null
+  try {
+    _updatePack = await api('GET', `/api/instances/${id}/modpack/versions`)
+  } catch (err) {
+    newSel.innerHTML = ''
+    const errorEl = document.getElementById('update-error')
+    errorEl.textContent = `Failed to load modpack versions: ${err.message}`
+    errorEl.classList.remove('hidden')
+    return
+  }
+  if (detailId !== id) return
+
+  const inst = instances.get(id)
+  const known = _updatePack.installed_version_id
+  const installed = _updatePack.versions.find(v => v.id === known)
+  document.getElementById('update-current-ver').textContent =
+    `Current: ${_updatePack.title} ${installed?.version_number ?? '(version unknown)'} · ` +
+    `${LOADER_NAMES[inst.loader] ?? inst.loader ?? ''} ${inst.loader_version ?? ''} · MC ${inst.minecraft_version}`
+
+  // Unknown installed version: ask, suggesting the newest one for the current Minecraft version
+  document.getElementById('update-pack-installed-field').classList.toggle('hidden', !!installed)
+  if (!installed) {
+    oldSel.innerHTML = _updatePack.versions.map(v => packVersionOption(v)).join('')
+    oldSel.disabled = false
+    const guess = _updatePack.versions.find(v => v.game_versions.includes(inst.minecraft_version))
+    if (guess) oldSel.value = guess.id
+  }
+  renderUpdatePackChoices()
+}
+
+function packVersionOption(v) {
+  return `<option value="${esc(v.id)}">${esc(v.version_number)} — MC ${esc(v.game_versions.join(', '))}</option>`
+}
+
+function renderUpdatePackChoices() {
+  const newSel = document.getElementById('update-pack-version')
+  if (!_updatePack) return
+  const installedId = _updatePack.installed_version_id ?? document.getElementById('update-pack-installed').value
+  // Versions are newest first: offer the ones published after the installed version
+  const idx = _updatePack.versions.findIndex(v => v.id === installedId)
+  const newer = idx === -1 ? _updatePack.versions : _updatePack.versions.slice(0, idx)
+  newSel.innerHTML = newer.length
+    ? newer.map(v => packVersionOption(v)).join('')
+    : '<option value="">Already on the newest version</option>'
+  newSel.disabled = !newer.length
 }
 
 function renderUpdateLoaderVersions() {
@@ -2730,13 +2797,26 @@ async function submitUpdate(e) {
 
   const minecraft_version = document.getElementById('update-mc-ver').value
   const loader_version    = document.getElementById('update-loader-ver').value
+  const packVersion       = document.getElementById('update-pack-version').value
+  const packInstalled     = _updatePack?.installed_version_id ? null : document.getElementById('update-pack-installed').value
+  if (_updateMode === 'pack' ? !packVersion : !(minecraft_version && loader_version)) {
+    btn.disabled = false
+    btn.textContent = 'Download & Install'
+    errorEl.textContent = 'Choose a version to install.'
+    errorEl.classList.remove('hidden')
+    return
+  }
 
   document.getElementById('update-step-1').classList.add('hidden')
   document.getElementById('update-step-2').classList.remove('hidden')
   document.getElementById('update-progress-msg').textContent = 'Downloading & installing…'
 
   try {
-    await api('POST', `/api/instances/${detailId}/update-version`, { minecraft_version, loader_version })
+    if (_updateMode === 'pack') {
+      await api('POST', `/api/instances/${detailId}/modpack/update`, { version_id: packVersion, installed_version_id: packInstalled })
+    } else {
+      await api('POST', `/api/instances/${detailId}/update-version`, { minecraft_version, loader_version })
+    }
   } catch (err) {
     document.getElementById('update-step-1').classList.remove('hidden')
     document.getElementById('update-step-2').classList.add('hidden')
