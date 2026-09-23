@@ -82,6 +82,20 @@ To change the port, create `~/.local/share/msm/config.toml`:
 port = 7331
 ```
 
+### Dashboard password
+
+Without a password, anyone who can reach the dashboard can control your servers (MSM logs a warning at startup). Set one in `config.toml`:
+
+```toml
+[web]
+password  = "a long random password"
+api_token = "another long random string"   # optional, read-only — for Homepage or scripts
+```
+
+The dashboard then shows a login page; sessions last 30 days (or until MSM restarts). The `api_token` is sent as `Authorization: Bearer <token>` and only allows reading (GET requests), so it can't start, stop or change anything.
+
+Requests that change something are always refused when a browser marks them as coming from another website, so other pages you visit can't drive MSM through your browser — with or without a password.
+
 ### Discord bot
 
 Add a `[discord]` section to `config.toml`:
@@ -179,7 +193,7 @@ MSM exposes `GET /api/homepage` for [Homepage](https://gethomepage.dev)'s `custo
 }
 ```
 
-`status` is `starting`, `running`, `stopping` or `offline`; the other active-server fields are `null` when nothing is running.
+`status` is `starting`, `running`, `stopping` or `offline`; the other active-server fields are `null` when nothing is running. If you set a [dashboard password](#dashboard-password), give Homepage the read-only `api_token`.
 
 **Docker labels:** the included `docker-compose.yml` already carries Homepage labels. If Homepage has [Docker discovery](https://gethomepage.dev/configs/docker/) enabled and shares a Docker network with MSM, the service appears automatically. Adjust `homepage.href` to the URL you open the dashboard at.
 
@@ -194,6 +208,8 @@ MSM exposes `GET /api/homepage` for [Homepage](https://gethomepage.dev)'s `custo
         widget:
           type: customapi
           url: http://your-host:8080/api/homepage
+          headers:
+            Authorization: Bearer your-api-token   # only if you set a [web] password
           mappings:
             - field: status
               label: Status

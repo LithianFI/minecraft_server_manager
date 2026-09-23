@@ -53,6 +53,12 @@ impl Default for DiscordNotifyConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WebConfig {
     pub port: Option<u16>,
+    /// Dashboard password; when unset the dashboard is open to anyone who can reach it
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    /// Read-only token for GET requests (e.g. Homepage), sent as `Authorization: Bearer <token>`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

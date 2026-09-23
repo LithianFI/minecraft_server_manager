@@ -198,6 +198,7 @@ pub struct AppState {
     pub processes: Mutex<HashMap<String, ProcessHandle>>,
     pub log_tx: broadcast::Sender<WsEvent>,
     pub global_config: GlobalConfig,
+    pub sessions: crate::auth::Sessions,
     pub discord_notify: Arc<RwLock<DiscordNotifyConfig>>,
     pub http_client: reqwest::Client,
     pub metrics_db: crate::metrics_db::MetricsDb,

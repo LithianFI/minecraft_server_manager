@@ -1,4 +1,5 @@
 mod api;
+mod auth;
 mod backup;
 mod ban;
 mod config;
@@ -27,7 +28,6 @@ use axum::{
     routing::{get, post},
 };
 use tokio::sync::{Mutex, RwLock, broadcast};
-use tower_http::cors::CorsLayer;
 
 use state::AppState;
 
@@ -81,6 +81,7 @@ async fn main() {
         processes: Mutex::new(Default::default()),
         log_tx,
         global_config,
+        sessions: Default::default(),
         discord_notify,
         http_client: reqwest::Client::new(),
         metrics_db,
@@ -98,6 +99,10 @@ async fn main() {
         .route("/", get(|| async { Html(HTML) }))
         .route("/style.css", get(serve_css))
         .route("/app.js", get(serve_js))
+        .route("/login", get(auth::login_page))
+        .route("/api/login", post(auth::login))
+        .route("/api/logout", post(auth::logout))
+        .route("/api/session", get(auth::session_info))
         // Server-sent events
         .route("/events", get(sse::sse_handler))
         // API
@@ -152,8 +157,10 @@ async fn main() {
         .route("/api/instances/{id}/backup-config", get(api::get_backup_config).post(api::update_backup_config))
         .route("/api/homepage", get(api::homepage_summary))
         .route("/api/discord-notify", get(api::get_discord_notify).post(api::update_discord_notify))
-        .with_state(state.clone())
-        .layer(CorsLayer::permissive());
+        .layer(axum::middleware::from_fn_with_state(state.clone(), auth::require_auth))
+        .with_state(state.clone());
+
+    auth::warn_if_open(&state);
 
     let addr = format!("0.0.0.0:{}", port);
     tracing::info!("Listening on http://localhost:{}", port);

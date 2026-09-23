@@ -20,7 +20,19 @@ let macrosOpen    = false
 let _toastId = 0
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
-window.addEventListener('DOMContentLoaded', setupSSE)
+window.addEventListener('DOMContentLoaded', () => { setupSSE(); loadSession() })
+
+// ─── Session ─────────────────────────────────────────────────────────────────
+async function loadSession() {
+  try {
+    const s = await api('GET', '/api/session')
+    document.getElementById('btn-logout').classList.toggle('hidden', !s.auth_enabled)
+  } catch { /* api() already redirects to /login when logged out */ }
+}
+
+async function logout() {
+  try { await api('POST', '/api/logout') } finally { location.href = '/login' }
+}
 
 // ─── SSE ─────────────────────────────────────────────────────────────────────
 function setupSSE() {
@@ -28,7 +40,9 @@ function setupSSE() {
   es.onmessage = (e) => {
     try { handleEvent(JSON.parse(e.data)) } catch { /* ignore malformed */ }
   }
-  // EventSource reconnects automatically on error
+  // EventSource reconnects automatically on error; if that's because the session
+  // expired, loadSession() gets a 401 and api() sends us to the login page
+  es.onerror = () => loadSession()
 }
 
 function handleEvent(ev) {
@@ -3099,6 +3113,10 @@ async function api(method, path, body) {
   const opts = { method, headers: {} }
   if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body) }
   const res = await fetch(path, opts)
+  if (res.status === 401 && path !== '/api/logout') {
+    location.href = '/login'
+    throw new Error('Not logged in')
+  }
   if (res.status === 204) return
   const json = await res.json().catch(() => ({ error: res.statusText }))
   if (!res.ok) throw new Error(json.error ?? res.statusText)

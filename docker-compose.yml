@@ -20,6 +20,7 @@ services:
       - homepage.description=Minecraft Server Manager
       - homepage.widget.type=customapi
       - homepage.widget.url=http://msm:8080/api/homepage
+      # - homepage.widget.headers.Authorization=Bearer your-api-token   # if you set a [web] password
       - homepage.widget.mappings[0].label=Status
       - homepage.widget.mappings[0].field=status
       - homepage.widget.mappings[1].label=Players
