@@ -144,6 +144,7 @@ async fn main() {
         .route("/api/instances/{id}/datapacks/update-all", post(api::update_all_datapacks))
         .route("/api/instances/{id}/datapacks/{project_id}/update", post(api::update_single_datapack))
         .route("/api/instances/{id}/update-version", post(api::update_server_version))
+        .route("/api/instances/{id}/update-version/mods", get(api::check_version_mods))
         .route("/api/instances/{id}/crash-report", get(api::get_crash_report))
         .route("/api/instances/{id}/files", get(api::list_files))
         .route("/api/instances/{id}/distribution", get(api::get_distribution).post(api::set_distribution))

@@ -277,6 +277,29 @@ pub async fn install_server(
 
 // ── In-place version update ────────────────────────────────────────────────────
 
+/// Rescans the server's mods and checks which have a version for `minecraft_version`.
+pub async fn plan_mods_for_version(
+    state: &AppState,
+    instance_id: &str,
+    minecraft_version: &str,
+) -> Result<crate::mod_mgr::VersionChangePlan, String> {
+    let (server_path, instance_dir, loader) = {
+        let instances = state.instances.read().await;
+        let inst = instances.get(instance_id).ok_or_else(|| format!("Instance '{}' not found", instance_id))?;
+        (
+            inst.config.server.path.clone(),
+            inst.instance_dir.clone(),
+            inst.config.instance.loader.clone().unwrap_or_default(),
+        )
+    };
+    if !server_path.join("mods").is_dir() {
+        return Ok(Default::default());
+    }
+    // Rescan so mods added or removed by hand are included
+    let lock = crate::mod_mgr::scan_mods(&state.http_client, &server_path, &instance_dir).await?;
+    crate::mod_mgr::plan_version_change(&state.http_client, &lock, minecraft_version, &loader).await
+}
+
 pub async fn update_server_version(
     state: Arc<AppState>,
     instance_id: String,
@@ -320,6 +343,26 @@ pub async fn update_server_version(
         return;
     }
 
+    // A new Minecraft version needs matching mods. Download them all before changing
+    // anything, so a failed download leaves the server as it was.
+    let mut mod_changes = None;
+    if minecraft_version != old_mc {
+        send_log(format!("Checking mods for Minecraft {}…", minecraft_version));
+        let plan = match plan_mods_for_version(&state, &instance_id, &minecraft_version).await {
+            Ok(plan) => plan,
+            Err(e) => { send_fail(format!("Couldn't check mods, update cancelled: {}", e)); return; }
+        };
+        let mut downloads = Vec::new();
+        for update in &plan.updates {
+            send_log(format!("Downloading {} {}…", update.name, update.latest_version_number));
+            match crate::mod_mgr::download_update(&state.http_client, update).await {
+                Ok(bytes) => downloads.push((update.clone(), bytes)),
+                Err(e) => { send_fail(format!("{}, update cancelled", e)); return; }
+            }
+        }
+        mod_changes = Some((plan, downloads));
+    }
+
     // Full backup first, so the update (loader files, and the world if Minecraft changes)
     // can be rolled back from the Backups tab
     send_log("Taking a full backup before changing anything…".to_string());
@@ -337,6 +380,31 @@ pub async fn update_server_version(
     if let Err(e) = run_loader_installer(&state, &loader, &minecraft_version, &loader_version, &server_path, make_log).await {
         send_fail(e);
         return;
+    }
+
+    if let Some((plan, downloads)) = mod_changes {
+        let mut lock = crate::mod_mgr::read_lock(&instance_dir);
+        for (update, bytes) in &downloads {
+            if let Err(e) = crate::mod_mgr::install_update(bytes, update, &server_path, &mut lock).await {
+                let _ = crate::mod_mgr::write_lock(&instance_dir, &lock);
+                send_fail(format!("{} — roll back from the Backups tab", e));
+                return;
+            }
+            send_log(format!("Updated {} to {}", update.name, update.latest_version_number));
+        }
+        if let Err(e) = crate::mod_mgr::write_lock(&instance_dir, &lock) {
+            send_fail(e);
+            return;
+        }
+        for entry in &plan.missing {
+            match crate::mod_mgr::set_mod_enabled(&server_path, &instance_dir, &entry.filename, false) {
+                Ok(_) => send_log(format!("⚠ Disabled {}: no version for Minecraft {} yet", entry.name, minecraft_version)),
+                Err(e) => { send_fail(format!("{} — roll back from the Backups tab", e)); return; }
+            }
+        }
+        for name in &plan.unknown {
+            send_log(format!("⚠ {} isn't on Modrinth, so it was left as is — check it supports Minecraft {}", name, minecraft_version));
+        }
     }
 
     // Newer Minecraft versions can need a newer Java

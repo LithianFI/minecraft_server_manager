@@ -1556,6 +1556,36 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .update-mode button + button { border-left: 1px solid var(--border-hi); }
 .update-mode button.active { background: var(--green-dim); color: var(--green); }
 
+/* Mod check before a Minecraft version change */
+.update-mods {
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface);
+  overflow: hidden;
+}
+.update-mods-head { padding: 8px 12px; color: var(--text-dim); }
+.update-mods-head.good { color: var(--green); background: var(--green-dim); }
+.update-mods-head.bad  { color: var(--amber); background: var(--amber-dim); }
+.update-mods-note { padding: 6px 12px 0; color: var(--text-dim); line-height: 1.5; }
+.update-mods ul { list-style: none; padding: 6px 0; max-height: 220px; overflow-y: auto; }
+.update-mods li {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 3px 12px 3px 26px; position: relative;
+  animation: update-mod-in .25s both;
+}
+.update-mods li:nth-child(2) { animation-delay: .03s; } .update-mods li:nth-child(3) { animation-delay: .06s; }
+.update-mods li:nth-child(4) { animation-delay: .09s; } .update-mods li:nth-child(n+5) { animation-delay: .12s; }
+.update-mods li::before { position: absolute; left: 10px; font-family: var(--mono); }
+.update-mods li.ok::before      { content: '✓'; color: var(--green); }
+.update-mods li.bad::before     { content: '✕'; color: var(--amber); }
+.update-mods li.unknown::before { content: '?'; color: var(--text-muted); }
+.update-mods-name { color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.update-mods-detail { font-family: var(--mono); font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+.update-mods li.bad .update-mods-detail { color: var(--amber); }
+@keyframes update-mod-in { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .update-mods li { animation: none; } }
+
 .btn-sm { font-size: 12px; padding: 5px 12px; }
 
 /* ── Toast notifications ─────────────────────────────────────────── */

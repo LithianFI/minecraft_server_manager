@@ -166,7 +166,7 @@ function handleEvent(ev) {
         inst.minecraft_version = ev.minecraft_version
         inst.loader_version    = ev.loader_version
         updateCard(inst)
-        if (detailId === ev.instance_id) refreshDetail(inst)
+        if (detailId === ev.instance_id) { refreshDetail(inst); loadMods(inst.id) }
       }
       onUpdateDone(ev.instance_id)
       break
@@ -3046,6 +3046,8 @@ async function openUpdateModal() {
   document.getElementById('update-mode').classList.toggle('hidden', !isPack)
   setUpdateMode(isPack ? 'pack' : 'loader')
   if (isPack) loadUpdatePackVersions(id)
+  document.getElementById('update-mods').classList.add('hidden')
+  _updateModsCheck++
 
   const mcSel  = document.getElementById('update-mc-ver')
   const verSel = document.getElementById('update-loader-ver')
@@ -3087,6 +3089,9 @@ function setUpdateMode(mode) {
   document.querySelectorAll('#update-mode button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode))
   document.getElementById('update-pack-section').classList.toggle('hidden', mode !== 'pack')
   document.getElementById('update-loader-section').classList.toggle('hidden', mode !== 'loader')
+  // The mod check only applies to Minecraft version changes in loader mode
+  const mc = document.getElementById('update-mc-ver').value
+  checkUpdateMods(mode === 'loader' ? instances.get(detailId) : null, mc)
 }
 
 async function loadUpdatePackVersions(id) {
@@ -3146,6 +3151,59 @@ function renderUpdateLoaderVersions() {
   const entry = cachedLoaderVersions(inst?.loader).find(e => e.minecraft === mc)
   fillLoaderVersionSelect(document.getElementById('update-loader-ver'), entry?.loaders ?? [])
   document.getElementById('update-mc-note').classList.toggle('hidden', !inst || mc === inst.minecraft_version)
+  checkUpdateMods(inst, mc)
+}
+
+// Moving to another Minecraft version brings the mods along: show what will happen to each first
+let _updateModsCheck = 0
+async function checkUpdateMods(inst, mc) {
+  const box = document.getElementById('update-mods')
+  const btn = document.getElementById('btn-update-submit')
+  const check = ++_updateModsCheck
+  btn.textContent = 'Download & Install'
+  if (!inst || !mc || mc === inst.minecraft_version) {
+    box.classList.add('hidden')
+    btn.disabled = false
+    return
+  }
+  box.classList.remove('hidden')
+  box.innerHTML = `<div class="update-mods-head">Checking your mods for Minecraft ${esc(mc)}…</div>`
+  btn.disabled = true
+  let plan
+  try {
+    plan = await api('GET', `/api/instances/${inst.id}/update-version/mods?minecraft_version=${encodeURIComponent(mc)}`)
+  } catch (err) {
+    if (check !== _updateModsCheck) return
+    box.innerHTML = `<div class="update-mods-head bad">Couldn't check the mods: ${esc(err.message)}</div>`
+    return
+  }
+  if (check !== _updateModsCheck) return
+
+  const total = plan.updates.length + plan.compatible.length + plan.missing.length + plan.unknown.length
+  btn.disabled = false
+  if (!total) { box.classList.add('hidden'); return }
+
+  const row = (cls, name, detail) =>
+    `<li class="${cls}"><span class="update-mods-name">${esc(name)}</span><span class="update-mods-detail">${detail}</span></li>`
+  const rows = [
+    ...plan.updates.map(u => row('ok', u.name, `${esc(u.installed_version_number)} → ${esc(u.latest_version_number)}`)),
+    ...plan.compatible.map(n => row('ok', n, 'already compatible')),
+    ...plan.missing.map(m => row('bad', m.name, 'no version yet · will be disabled')),
+    ...plan.unknown.map(n => row('unknown', n, 'not on Modrinth · left as is')),
+  ]
+  const problems = plan.missing.length + plan.unknown.length
+  let head
+  if (!problems) {
+    head = `<div class="update-mods-head good">✓ All ${total} mods are ready for Minecraft ${esc(mc)}</div>`
+  } else {
+    const parts = []
+    if (plan.missing.length) parts.push(`${plan.missing.length} ${plan.missing.length === 1 ? "doesn't" : "don't"} support Minecraft ${esc(mc)} yet and will be disabled`)
+    if (plan.unknown.length) parts.push(`${plan.unknown.length} can't be checked`)
+    head = `<div class="update-mods-head bad">⚠ ${parts.join('; ')}.</div>` +
+      `<div class="update-mods-note">Blocks and items from disabled mods disappear from the world. Wait for an update, or go ahead: the backup lets you roll back.</div>`
+  }
+  box.innerHTML = head + `<ul>${rows.join('')}</ul>`
+  if (plan.updates.length) btn.textContent = `Update Server & ${plan.updates.length} Mod${plan.updates.length === 1 ? '' : 's'}`
 }
 
 function closeUpdateModal() {

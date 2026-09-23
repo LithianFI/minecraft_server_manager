@@ -774,6 +774,23 @@ pub async fn update_server_version(
     Ok(StatusCode::ACCEPTED)
 }
 
+#[derive(Deserialize)]
+pub struct VersionCheckQuery {
+    pub minecraft_version: String,
+}
+
+/// Which mods can follow the server to another Minecraft version, shown before updating.
+pub async fn check_version_mods(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(q): Query<VersionCheckQuery>,
+) -> ApiResult<Json<mod_mgr::VersionChangePlan>> {
+    setup::plan_mods_for_version(&state, &id, &q.minecraft_version)
+        .await
+        .map(Json)
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, e))
+}
+
 // ── Config file editor ───────────────────────────────────────────────────────
 
 #[derive(Deserialize)]

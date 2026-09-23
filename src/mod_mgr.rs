@@ -48,6 +48,19 @@ pub struct ModUpdate {
     pub sha512: String,
 }
 
+/// What happens to each mod when the server moves to another Minecraft version.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct VersionChangePlan {
+    /// Mods that get a new version for the target Minecraft
+    pub updates: Vec<ModUpdate>,
+    /// Mods whose installed version already supports the target (names)
+    pub compatible: Vec<String>,
+    /// Mods with no version for the target yet; they get disabled
+    pub missing: Vec<ModEntry>,
+    /// Jars Modrinth doesn't know, so MSM can't tell whether they'll work (names)
+    pub unknown: Vec<String>,
+}
+
 // ── Modrinth response types ───────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -242,13 +255,52 @@ pub async fn check_updates(
 ) -> Result<Vec<ModUpdate>, String> {
     // Disabled mods and jars Modrinth doesn't know are left alone
     let checkable: Vec<&ModEntry> = lock.mods.iter().filter(|m| m.on_modrinth() && !m.disabled).collect();
-    if checkable.is_empty() {
-        return Ok(Vec::new());
-    }
+    let latest = latest_versions(client, &checkable, mc_version, loader).await?;
+    let mut updates: Vec<ModUpdate> = checkable
+        .iter()
+        .filter_map(|entry| to_update(entry, latest.get(&entry.sha512)?))
+        .collect();
+    updates.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(updates)
+}
 
-    let hash_to_mod: HashMap<&str, &ModEntry> =
-        checkable.iter().map(|m| (m.sha512.as_str(), *m)).collect();
-    let hashes: Vec<&str> = checkable.iter().map(|m| m.sha512.as_str()).collect();
+/// Checks which mods have a version for `mc_version` before moving the server to it.
+pub async fn plan_version_change(
+    client: &reqwest::Client,
+    lock: &ModLock,
+    mc_version: &str,
+    loader: &str,
+) -> Result<VersionChangePlan, String> {
+    let checkable: Vec<&ModEntry> = lock.mods.iter().filter(|m| m.on_modrinth() && !m.disabled).collect();
+    let latest = latest_versions(client, &checkable, mc_version, loader).await?;
+    let mut plan = VersionChangePlan::default();
+    for entry in checkable {
+        match latest.get(&entry.sha512) {
+            Some(v) if v.id == entry.modrinth_version_id => plan.compatible.push(entry.name.clone()),
+            Some(v) => match to_update(entry, v) {
+                Some(update) => plan.updates.push(update),
+                None => plan.missing.push(entry.clone()),
+            },
+            None => plan.missing.push(entry.clone()),
+        }
+    }
+    plan.unknown = lock.mods.iter().filter(|m| !m.on_modrinth() && !m.disabled).map(|m| m.name.clone()).collect();
+    plan.updates.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(plan)
+}
+
+/// Newest version of each mod for `mc_version`, keyed by the installed file's sha512.
+/// Mods without such a version are missing from the result.
+async fn latest_versions(
+    client: &reqwest::Client,
+    mods: &[&ModEntry],
+    mc_version: &str,
+    loader: &str,
+) -> Result<HashMap<String, MrVersion>, String> {
+    if mods.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let hashes: Vec<&str> = mods.iter().map(|m| m.sha512.as_str()).collect();
 
     let body = serde_json::json!({
         "hashes": hashes,
@@ -257,7 +309,7 @@ pub async fn check_updates(
         "game_versions": [mc_version]
     });
 
-    let resp: HashMap<String, MrVersion> = client
+    client
         .post(format!("{}/version_files/update", MODRINTH))
         .header("User-Agent", UA)
         .json(&body)
@@ -266,32 +318,26 @@ pub async fn check_updates(
         .map_err(|e| format!("Modrinth update check failed: {}", e))?
         .json()
         .await
-        .map_err(|e| format!("Modrinth parse error: {}", e))?;
+        .map_err(|e| format!("Modrinth parse error: {}", e))
+}
 
-    let mut updates: Vec<ModUpdate> = resp
-        .iter()
-        .filter_map(|(hash, latest)| {
-            let entry = hash_to_mod.get(hash.as_str())?;
-            if latest.id == entry.modrinth_version_id {
-                return None;
-            }
-            let file = latest.files.iter().find(|f| f.primary).or_else(|| latest.files.first())?;
-            Some(ModUpdate {
-                project_id: entry.modrinth_project_id.clone(),
-                name: entry.name.clone(),
-                installed_version_id: entry.modrinth_version_id.clone(),
-                installed_version_number: entry.version_number.clone(),
-                latest_version_id: latest.id.clone(),
-                latest_version_number: latest.version_number.clone(),
-                download_url: file.url.clone(),
-                filename: file.filename.clone(),
-                sha512: file.hashes.sha512.clone(),
-            })
-        })
-        .collect();
-
-    updates.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(updates)
+/// `None` when `latest` is what's installed already (or has no files).
+fn to_update(entry: &ModEntry, latest: &MrVersion) -> Option<ModUpdate> {
+    if latest.id == entry.modrinth_version_id {
+        return None;
+    }
+    let file = latest.files.iter().find(|f| f.primary).or_else(|| latest.files.first())?;
+    Some(ModUpdate {
+        project_id: entry.modrinth_project_id.clone(),
+        name: entry.name.clone(),
+        installed_version_id: entry.modrinth_version_id.clone(),
+        installed_version_number: entry.version_number.clone(),
+        latest_version_id: latest.id.clone(),
+        latest_version_number: latest.version_number.clone(),
+        download_url: file.url.clone(),
+        filename: file.filename.clone(),
+        sha512: file.hashes.sha512.clone(),
+    })
 }
 
 // ── Search mods ───────────────────────────────────────────────────────────────
@@ -575,16 +621,12 @@ pub async fn apply_update(
     server_path: &Path,
     lock: &mut ModLock,
 ) -> Result<(), String> {
-    let mods_dir = server_path.join("mods");
+    let bytes = download_update(client, update).await?;
+    install_update(&bytes, update, server_path, lock).await
+}
 
-    let old_filename = lock
-        .mods
-        .iter()
-        .find(|m| m.modrinth_project_id == update.project_id)
-        .map(|m| m.filename.clone())
-        .ok_or_else(|| format!("Mod '{}' not in lock file", update.project_id))?;
-
-    // Download
+/// Downloads the update's jar and checks its hash, without touching the server.
+pub async fn download_update(client: &reqwest::Client, update: &ModUpdate) -> Result<Vec<u8>, String> {
     let bytes = client
         .get(&update.download_url)
         .header("User-Agent", UA)
@@ -613,9 +655,27 @@ pub async fn apply_update(
             update.filename
         ));
     }
+    Ok(bytes.to_vec())
+}
+
+/// Swaps the old jar for the downloaded one and updates the lock entry.
+pub async fn install_update(
+    bytes: &[u8],
+    update: &ModUpdate,
+    server_path: &Path,
+    lock: &mut ModLock,
+) -> Result<(), String> {
+    let mods_dir = server_path.join("mods");
+
+    let old_filename = lock
+        .mods
+        .iter()
+        .find(|m| m.modrinth_project_id == update.project_id)
+        .map(|m| m.filename.clone())
+        .ok_or_else(|| format!("Mod '{}' not in lock file", update.project_id))?;
 
     // Write new file
-    tokio::fs::write(mods_dir.join(&update.filename), &bytes[..])
+    tokio::fs::write(mods_dir.join(&update.filename), bytes)
         .await
         .map_err(|e| format!("Failed to write {}: {}", update.filename, e))?;
 
