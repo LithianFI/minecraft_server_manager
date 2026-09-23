@@ -69,6 +69,33 @@ pub fn recommended_java(mc_version: &str) -> u32 {
     }
 }
 
+/// Finds the Java a new instance of `mc_version` should use, reporting the outcome via `log`.
+/// Returns `None` when the system default `java` is already right (or nothing suitable exists).
+pub async fn pick_for_minecraft(mc_version: &str, log: impl Fn(&str)) -> Option<String> {
+    let required = recommended_java(mc_version);
+    let found = tokio::task::spawn_blocking(move || find_java(required))
+        .await
+        .unwrap_or(None);
+
+    match &found {
+        Some(p) => log(&format!(
+            "Java {required} required — found at {} — configuring instance.",
+            p.display()
+        )),
+        None => {
+            // find_java returns None when the system default is already correct
+            let system = tokio::task::spawn_blocking(|| java_version("java")).await.unwrap_or(None);
+            if system != Some(required) {
+                log(&format!(
+                    "Warning: Java {required} required but not found on this system. \
+                     Set the Java path manually in instance settings."
+                ));
+            }
+        }
+    }
+    found.map(|p| p.to_string_lossy().into_owned())
+}
+
 /// Returns the major version reported by a java binary, or None if it can't be run.
 pub fn java_version(java_bin: &str) -> Option<u32> {
     let out = std::process::Command::new(java_bin)

@@ -190,26 +190,7 @@ async fn do_import(state: &Arc<AppState>, req: FtbImportRequest) -> Result<(), S
     }
 
     // Java version detection
-    let required_java = crate::java::recommended_java(&mc_version);
-    let java_path = tokio::task::spawn_blocking(move || crate::java::find_java(required_java))
-        .await
-        .unwrap_or(None);
-
-    match &java_path {
-        Some(p) => log(&format!(
-            "Java {} required — found at {} — configuring instance.",
-            required_java,
-            p.display()
-        )),
-        None => {
-            if crate::java::java_version("java") != Some(required_java) {
-                log(&format!(
-                    "Warning: Java {} required but not found. Set java_path manually in instance settings.",
-                    required_java
-                ));
-            }
-        }
-    }
+    let java_path = crate::java::pick_for_minecraft(&mc_version, log).await;
 
     // Register instance
     log("Registering instance…");
@@ -232,7 +213,7 @@ async fn do_import(state: &Arc<AppState>, req: FtbImportRequest) -> Result<(), S
         server: crate::config::ServerConfig {
             path: server_path,
             java_opts: None,
-            java_path: java_path.map(|p| p.to_string_lossy().into_owned()),
+            java_path,
         },
         backup: Some(crate::config::BackupConfig {
             enabled: false,

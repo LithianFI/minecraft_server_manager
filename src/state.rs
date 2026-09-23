@@ -141,6 +141,7 @@ pub enum WsEvent {
     },
     SetupDone {
         server_path: String,
+        java_path: Option<String>,
     },
     SetupFailed {
         error: String,

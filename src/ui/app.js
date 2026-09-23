@@ -176,7 +176,7 @@ function handleEvent(ev) {
       appendSetupLog(ev.message)
       break
     case 'setup_done':
-      onSetupDone(ev.server_path)
+      onSetupDone(ev.server_path, ev.java_path)
       break
     case 'setup_failed':
       onSetupFailed(ev.error)
@@ -1465,6 +1465,7 @@ let _setupPort       = 25565
 let _setupLoader     = null
 let _setupMcVer      = null
 let _setupLoaderVer  = null
+let _setupJavaPath   = null
 const _setupVersions = {}  // loader → [{ minecraft, loaders: [...] }], newest first
 
 const LOADER_NAMES = { neoforge: 'NeoForge', forge: 'Forge', fabric: 'Fabric' }
@@ -1596,8 +1597,9 @@ function appendSetupLog(msg) {
   el.scrollTop = el.scrollHeight
 }
 
-function onSetupDone(serverPath) {
+function onSetupDone(serverPath, javaPath) {
   _setupServerPath = serverPath
+  _setupJavaPath   = javaPath
   document.getElementById('setup-progress-msg').textContent = 'Installation complete!'
   document.getElementById('btn-setup-done').classList.remove('hidden')
   document.getElementById('btn-setup-close').classList.remove('hidden')
@@ -1625,6 +1627,7 @@ async function finishSetup() {
       minecraft_version: _setupMcVer,
       loader:            _setupLoader,
       loader_version:    _setupLoaderVer,
+      java_path:         _setupJavaPath,
       port:              _setupPort,
     })
     instances.set(inst.id, inst)

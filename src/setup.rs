@@ -248,7 +248,11 @@ pub async fn install_server(
             let _ = state.log_tx.send(WsEvent::SetupLog {
                 message: "Installation complete.".to_string(),
             });
-            let _ = state.log_tx.send(WsEvent::SetupDone { server_path });
+            let java_path = crate::java::pick_for_minecraft(&minecraft_version, |msg| {
+                let _ = state.log_tx.send(WsEvent::SetupLog { message: msg.to_string() });
+            })
+            .await;
+            let _ = state.log_tx.send(WsEvent::SetupDone { server_path, java_path });
         }
         Err(e) => {
             let _ = state.log_tx.send(WsEvent::SetupFailed { error: e });
