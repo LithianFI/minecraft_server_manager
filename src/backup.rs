@@ -610,6 +610,20 @@ async fn run_backup_scheduler(state: Arc<AppState>, instance_id: String, schedul
         let now = Utc::now();
         let duration = (next - now).to_std().unwrap_or(Duration::ZERO);
         tokio::time::sleep(duration).await;
+
+        // Only back up the active server
+        let is_running = state
+            .instances
+            .read()
+            .await
+            .get(&instance_id)
+            .map(|i| matches!(i.status, InstanceStatus::Running))
+            .unwrap_or(false);
+        if !is_running {
+            tracing::debug!("Skipping scheduled backup for '{}': not running", instance_id);
+            continue;
+        }
+
         tracing::info!("Running scheduled backup for '{}'", instance_id);
         trigger_backup(state.clone(), instance_id.clone()).await;
     }
