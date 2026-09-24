@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build *)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo test *)",
+      "Bash(xargs -I{} wc -l {})",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(cargo check *)",
+      "Bash(cat .gitignore; echo \"---\"; find . -iname \"*.service\" -not -path \"./target/*\"; echo \"---data dir---\"; ls -la ~/.local/share/msm 2>/dev/null)",
+      "Bash(find / -maxdepth 6 -iname \"*msm*\" -not -path \"/proc/*\")",
+      "Bash(find / -maxdepth 6 -iname \"instances\" -not -path \"/proc/*\")"
+    ]
+  }
+}
