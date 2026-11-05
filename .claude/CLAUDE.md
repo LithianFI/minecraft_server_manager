@@ -1,81 +1,92 @@
-# CLAUDE.md
+# Global Guidelines
 
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+These apply to every project. Project-level CLAUDE.md files add to or override them.
 
-**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+## Precedence
+- Existing codebase conventions take precedence over this file. When they conflict, follow the codebase and mention the discrepancy.
+- Follow the language's idiomatic naming and style (e.g. PascalCase methods in C#, snake_case in Python).
 
-## 1. Think Before Coding
+## Process & Communication
+- Ask when ambiguity would change the design or behavior. For minor choices, pick the simplest option and state the assumption.
+- If there is a better way to achieve what I want, suggest it before implementing.
+- For larger changes or additions (new features, changes spanning several files, design decisions, or changes to existing behavior), present a plan stating what will be changed and why, and wait for confirmation.
+- For small changes or precise instructions, skip the plan and make the change directly.
+- Keep changes targeted; don't modify anything that isn't required for the task.
+- If you notice something that could be improved outside the task's scope, mention it rather than changing it.
+- Prefer simple solutions; avoid unnecessary complexity and speculative abstraction.
 
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
+## Before Making Changes
+- Read what the change requires; for larger changes, also check callers and existing patterns for similar problems.
+- Understand the cause before fixing a bug; don't patch symptoms. If the cause is unclear, investigate or ask rather than guessing.
+- For larger changes, consider at least one alternative and note in a sentence why you chose your approach.
+- Identify what else the change affects (callers, tests, configuration, docs) before editing.
+- If the task turns out larger or different than expected, stop and report before continuing.
 
-Before implementing:
-- State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them - don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
+## Ask Before
+- Adding, removing, or upgrading dependencies
+- Changing public APIs or contracts
+- Deleting files
+- Committing, pushing, or rewriting git history
+- Modifying configuration, infrastructure, or deployment files
 
-## 2. Simplicity First
+## Efficiency
+- Search (grep/glob) to locate code before opening files; read only the relevant sections of large files.
+- Don't re-read files you've already read unless they've changed.
+- Make targeted edits; don't rewrite whole files for small changes.
+- Run the narrowest relevant tests first, with quiet or filtered output; run the full suite before reporting done.
+- Keep responses concise. Don't narrate minor steps; report results, decisions, and anything that needs my attention.
+- Summarize what changed and why; don't echo back code you just wrote or restate my request.
 
-**Minimum code that solves the problem. Nothing speculative.**
+## Verification
+- Before reporting a task complete, build and run the relevant tests.
+- A successful build only proves it compiles. For logic changes (not layout or captions), also run the code, scaling the depth to the change's size and risk:
+  - Small, low-risk changes: existing tests covering the path, or a quick run of the affected code, are enough.
+  - Larger changes, new logic, or untested assumptions about library behavior: if existing tests don't exercise the changed path, write a small throwaway program in a scratch directory outside the repo (never in the repo) that exercises it, run it, and report what it showed.
+- Say which level of verification you chose and why.
+- State explicitly what was verified and what wasn't (e.g. "builds and unit tests pass; not run against a live server").
 
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
+## Code Organization
+- Aim for functions under ~30 lines; extract helpers when nesting exceeds two levels.
+- One function, one responsibility.
+- Group related constants at module level; no magic numbers inline.
+- Use intention-revealing names; avoid abbreviations except domain-standard ones.
+- Booleans should read as questions: `isValid` / `is_valid`, `hasPermission`, `shouldRetry`.
 
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+## Validation & Errors
+- Validate inputs and preconditions at function entry; use early returns to keep nesting shallow.
+- Use the project's established error-handling pattern. If none exists: exceptions for unexpected failures, Try-pattern or Result types for expected ones. Don't mix approaches within a module.
+- Never swallow exceptions or lose stack traces; add context when rethrowing.
+- Avoid returning null where an empty collection or Try-pattern works; enable nullable annotations where the language supports them.
 
-## 3. Surgical Changes
+## Architecture
+- Prefer immutable data and pure transformations; minimize mutable state.
+- Keep side effects (I/O, network, database) at the edges.
+- Inject abstractions at seams: I/O, external services, and anything that needs swapping in tests. Don't create interfaces with a single implementation by default.
+- Keep modules loosely coupled through well-defined contracts.
 
-**Touch only what you must. Clean up only your own mess.**
+## Security
+- Treat all external input as untrusted; validate it before use.
+- Use parameterized queries and safe APIs; never build SQL, shell commands, or markup by string concatenation.
+- Never trust client-side data for authorization; verify server-side.
+- Never log secrets, credentials, or personal data at any log level.
 
-When editing existing code:
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it - don't delete it.
+## Performance
+- Batch operations against slow resources (database, network) instead of looping one call at a time.
+- Don't cache speculatively; cache when repeated use is evident or measured, and define invalidation at the same time.
 
-When your changes create orphans:
-- Remove imports/variables/functions that YOUR changes made unused.
-- Don't remove pre-existing dead code unless asked.
+## Configuration
+- Files on disk are the source of truth for configuration and infrastructure (e.g. Compose files over UI-driven setup).
+- No hard-coded environment-specific values; externalize them.
+- Validate configuration at startup and fail fast on missing required settings.
 
-The test: Every changed line should trace directly to the user's request.
+## Comments
+- Comments explain why, not what. Keep them short.
+- Longer explanations are fine for non-obvious domain, protocol, or vendor behavior.
 
-## 4. Goal-Driven Execution
+## Project Memory
+- If the project has a MEMORY.md, keep it current: when a convention, architectural decision, or notable edge case is agreed, update it immediately rather than waiting for the end of the session.
+- When I say "wrap up", summarize the session's decisions, new conventions, and known technical debt into MEMORY.md.
+- Keep MEMORY.md under ~100 lines; remove outdated entries and condense rather than appending indefinitely.
 
-**Define success criteria. Loop until verified.**
-
-Transform tasks into verifiable goals:
-- "Add validation" → "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
-
-For multi-step tasks, state a brief plan:
-```
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
-```
-
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
-
----
-
-**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
-
-
-## 5. Front-end
-You tend to converge toward generic, "on distribution" outputs. In frontend design, this creates what users call the "AI slop" aesthetic. Avoid this: make creative, distinctive frontends that surprise and delight.
-Focus on:
-- Typography: Choose fonts that are beautiful, unique, and interesting. Avoid generic fonts like Arial and Inter; opt instead for distinctive choices that elevate the frontend's aesthetics.
-- Color & Theme: Commit to a cohesive aesthetic. Use CSS variables for consistency. Dominant colors with sharp accents outperform timid, evenly-distributed palettes. Draw from IDE themes and cultural aesthetics for inspiration.
-- Motion: Use animations for effects and micro-interactions. Prioritize CSS-only solutions for HTML. Use Motion library for React when available. Focus on high-impact moments: one well-orchestrated page load with staggered reveals (animation-delay) creates more delight than scattered micro-interactions.
-- Backgrounds: Create atmosphere and depth rather than defaulting to solid colors. Layer CSS gradients, use geometric patterns, or add contextual effects that match the overall aesthetic.
-Avoid generic AI-generated aesthetics:
-- Overused font families (Inter, Roboto, Arial, system fonts)
-- Clichéd color schemes (particularly purple gradients on white backgrounds)
-- Predictable layouts and component patterns
-- Cookie-cutter design that lacks context-specific character
-Interpret creatively and make unexpected choices that feel genuinely designed for the context. Vary between light and dark themes, different fonts, different aesthetics. You still tend to converge on common choices (Space Grotesk, for example) across generations. Avoid this: it is critical that you think outside the box!
-
+## This Project
+@MEMORY.md
