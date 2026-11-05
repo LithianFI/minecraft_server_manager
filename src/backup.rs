@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -271,6 +272,17 @@ fn write_meta(archive: &Path, meta: &BackupMeta) -> Result<(), String> {
     fs::write(meta_path(archive), json).map_err(|e| format!("Failed to write backup info: {}", e))
 }
 
+/// The world folder named by `level-name` in server.properties
+fn level_name(server: &Path) -> String {
+    crate::datapack_mgr::read_level_name(server).unwrap_or_else(|| "world".to_string())
+}
+
+/// The world folder and its separate dimension folders (`<level>_nether`, `<level>_the_end`).
+/// `world*` folders always count, so backups made before `level-name` was read still restore.
+fn is_world_dir(name: &str, level: &str) -> bool {
+    name == level || name.starts_with(&format!("{}_", level)) || name.starts_with("world")
+}
+
 fn create_tar_zst(source: &Path, output: &Path, world_only: bool, manifest: &[u8]) -> Result<u64, String> {
     let out_file =
         File::create(output).map_err(|e| format!("Failed to create backup file: {}", e))?;
@@ -290,15 +302,23 @@ fn create_tar_zst(source: &Path, output: &Path, world_only: bool, manifest: &[u8
         .map_err(|e| format!("Failed to write backup manifest: {}", e))?;
 
     if world_only {
+        let level = level_name(source);
         let entries =
             fs::read_dir(source).map_err(|e| format!("Cannot read server dir: {}", e))?;
+        let mut found = false;
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if entry.path().is_dir() && name.starts_with("world") {
+            if entry.path().is_dir() && is_world_dir(&name, &level) {
                 archive
                     .append_dir_all(&name, entry.path())
                     .map_err(|e| format!("Failed to archive {}: {}", name, e))?;
+                found = true;
             }
+        }
+        if !found {
+            drop(archive);
+            let _ = fs::remove_file(output);
+            return Err(format!("No world folder '{}' found in the server directory", level));
         }
     } else {
         archive
@@ -513,7 +533,8 @@ fn clean_restore(backup: &Path, server: &Path, world_only: bool) -> Result<(), S
         return Err(e);
     }
 
-    let replaced = |name: &str| name != STAGING_DIR && name != PREVIOUS_DIR && (!world_only || name.starts_with("world"));
+    let level = level_name(server);
+    let replaced = |name: &str| name != STAGING_DIR && name != PREVIOUS_DIR && (!world_only || is_world_dir(name, &level));
     let names_in = |dir: &Path| -> Result<Vec<String>, String> {
         Ok(fs::read_dir(dir).map_err(|e| e.to_string())?
             .flatten()
@@ -566,8 +587,21 @@ fn normalize_cron(schedule: &str) -> String {
 }
 
 pub fn start_schedulers(state: Arc<AppState>) {
-    tokio::spawn(async move {
-        let scheduled: Vec<(String, String)> = {
+    tokio::spawn(run_backup_scheduler(state));
+}
+
+/// Re-reads every instance's backup settings on each tick, so enabling, disabling or
+/// rescheduling backups (or adding an instance) takes effect without restarting MSM.
+async fn run_backup_scheduler(state: Arc<AppState>) {
+    // Parsed schedules, so an invalid one is only warned about once
+    let mut parsed: HashMap<String, Option<Schedule>> = HashMap::new();
+    let mut last_check = Utc::now();
+
+    loop {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        let now = Utc::now();
+
+        let configured: Vec<(String, String, bool)> = {
             let instances = state.instances.read().await;
             instances
                 .values()
@@ -577,55 +611,39 @@ pub fn start_schedulers(state: Arc<AppState>) {
                         return None;
                     }
                     let schedule = backup.schedule.as_ref()?.clone();
-                    Some((inst.id.clone(), schedule))
+                    Some((inst.id.clone(), schedule, matches!(inst.status, InstanceStatus::Running)))
                 })
                 .collect()
         };
 
-        for (id, schedule_str) in scheduled {
-            let state = state.clone();
-            tokio::spawn(async move {
-                run_backup_scheduler(state, id, schedule_str).await;
+        for (instance_id, schedule_str, is_running) in configured {
+            let schedule = parsed.entry(schedule_str.clone()).or_insert_with(|| {
+                Schedule::from_str(&normalize_cron(&schedule_str))
+                    .inspect_err(|e| {
+                        tracing::warn!("Invalid backup schedule for '{}': '{}' — {}", instance_id, schedule_str, e)
+                    })
+                    .ok()
             });
-        }
-    });
-}
+            // Due if a scheduled time fell between the previous check and now
+            let due = schedule
+                .as_ref()
+                .and_then(|s| s.after(&last_check).next())
+                .is_some_and(|next| next <= now);
+            if !due {
+                continue;
+            }
 
-async fn run_backup_scheduler(state: Arc<AppState>, instance_id: String, schedule_str: String) {
-    let normalized = normalize_cron(&schedule_str);
-    let schedule = match Schedule::from_str(&normalized) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!(
-                "Invalid backup schedule for '{}': '{}' — {}",
-                instance_id,
-                schedule_str,
-                e
-            );
-            return;
-        }
-    };
+            // Only back up the active server
+            if !is_running {
+                tracing::debug!("Skipping scheduled backup for '{}': not running", instance_id);
+                continue;
+            }
 
-    for next in schedule.upcoming(Utc) {
-        let now = Utc::now();
-        let duration = (next - now).to_std().unwrap_or(Duration::ZERO);
-        tokio::time::sleep(duration).await;
-
-        // Only back up the active server
-        let is_running = state
-            .instances
-            .read()
-            .await
-            .get(&instance_id)
-            .map(|i| matches!(i.status, InstanceStatus::Running))
-            .unwrap_or(false);
-        if !is_running {
-            tracing::debug!("Skipping scheduled backup for '{}': not running", instance_id);
-            continue;
+            tracing::info!("Running scheduled backup for '{}'", instance_id);
+            tokio::spawn(trigger_backup(state.clone(), instance_id));
         }
 
-        tracing::info!("Running scheduled backup for '{}'", instance_id);
-        trigger_backup(state.clone(), instance_id.clone()).await;
+        last_check = now;
     }
 }
 
@@ -721,6 +739,33 @@ mod tests {
         assert!(!s.join("world/region/r.1.0.mca").exists(), "world replaced by the backup's");
         assert!(s.join("world/region/r.0.0.mca").exists());
         assert!(s.join("mods/pack-2.0.jar").exists(), "non-world files untouched");
+    }
+
+    #[test]
+    fn world_only_uses_level_name() {
+        let s = temp_dir("server");
+        write(&s.join("server.properties"), "motd=hi\nlevel-name=Crooked\n");
+        write(&s.join("Crooked/region/r.0.0.mca"), "old chunks");
+        write(&s.join("Crooked_nether/region/r.0.0.mca"), "nether");
+        write(&s.join("mods/pack.jar"), "mod");
+        let archive = temp_dir("out").join("w.tar.zst");
+        create_tar_zst(&s, &archive, true, &manifest(true)).unwrap();
+
+        write(&s.join("Crooked/region/r.1.0.mca"), "newer chunk");
+        write(&s.join("mods/pack-2.0.jar"), "new mod");
+        clean_restore(&archive, &s, true).unwrap();
+
+        assert!(s.join("Crooked/region/r.0.0.mca").exists());
+        assert!(!s.join("Crooked/region/r.1.0.mca").exists(), "world replaced by the backup's");
+        assert!(s.join("Crooked_nether/region/r.0.0.mca").exists());
+        assert!(s.join("mods/pack-2.0.jar").exists(), "non-world files untouched");
+
+        // No world folder at all: refuse rather than save an empty backup
+        fs::remove_dir_all(s.join("Crooked")).unwrap();
+        fs::remove_dir_all(s.join("Crooked_nether")).unwrap();
+        let empty = temp_dir("out").join("e.tar.zst");
+        assert!(create_tar_zst(&s, &empty, true, &manifest(true)).is_err());
+        assert!(!empty.exists());
     }
 
     #[test]
