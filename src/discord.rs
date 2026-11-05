@@ -701,6 +701,12 @@ async fn notify_task(
         match rx.recv().await {
             Ok(event) => {
                 let cfg = notify.read().await.clone();
+                // An update's test start isn't news to players
+                if let WsEvent::StateChanged { instance_id, .. } | WsEvent::CrashDetected { instance_id, .. } = &event {
+                    if state.instances.read().await.get(instance_id).is_some_and(|i| i.test_starting) {
+                        continue;
+                    }
+                }
                 let msg: Option<String> = match &event {
                     WsEvent::StateChanged { instance_id, status } => match status {
                         InstanceStatus::Running if cfg.server_started =>

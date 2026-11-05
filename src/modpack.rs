@@ -273,6 +273,7 @@ async fn do_import(state: &Arc<AppState>, req: ImportRequest) -> Result<(), Stri
         high_ram_alerted: false,
         last_deaths: std::collections::HashMap::new(),
         last_crash: None,
+        test_starting: false,
     };
 
     let info = crate::state::InstanceInfo::from(&inst_state);

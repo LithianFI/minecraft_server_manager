@@ -51,6 +51,8 @@ pub struct InstanceState {
     pub last_deaths: HashMap<String, DeathInfo>,
     /// Summary of the last crash; cleared when the server is next started by hand
     pub last_crash: Option<crate::crash::CrashSummary>,
+    /// Set while an update test-starts the server: no auto-restart or Discord notices
+    pub test_starting: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

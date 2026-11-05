@@ -222,6 +222,7 @@ pub async fn add_instance(
         schedules: vec![],
         distribution: None,
     };
+    crate::config::fill_loader_from_run_sh(&mut config.instance, &server_path);
     // "1.26.1" and the like don't exist; Minecraft went from 1.21 to year-based 26.1
     crate::config::repair_minecraft_version(&mut config.instance);
 
@@ -248,6 +249,7 @@ pub async fn add_instance(
         high_ram_alerted: false,
         last_deaths: std::collections::HashMap::new(),
         last_crash: None,
+        test_starting: false,
     };
 
     let info = InstanceInfo::from(&inst_state);

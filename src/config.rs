@@ -193,6 +193,25 @@ mod tests {
     }
 
     #[test]
+    fn fills_missing_loader_version_from_run_sh() {
+        let dir = std::env::temp_dir().join(format!("msm-loader-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("run.sh"), "java @libraries/net/neoforged/neoforge/26.1.0.19-beta/unix_args.txt \"$@\"\n").unwrap();
+        let mut m = InstanceMeta {
+            name: "x".into(), display_name: None, minecraft_version: "26.1".into(),
+            loader: Some("neoforge".into()), loader_version: None, port: 25565,
+            modrinth_project_id: None, modrinth_version_id: None,
+        };
+        assert!(fill_loader_from_run_sh(&mut m, &dir));
+        assert_eq!(m.loader_version.as_deref(), Some("26.1.0.19-beta"));
+        // A known version is left alone
+        m.loader_version = Some("26.1.0.1".into());
+        assert!(!fill_loader_from_run_sh(&mut m, &dir));
+        assert_eq!(m.loader_version.as_deref(), Some("26.1.0.1"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn rejects_misspelt_web_keys() {
         assert!(toml::from_str::<GlobalConfig>("[web]\npasword = \"x\"\n").is_err());
         assert!(toml::from_str::<GlobalConfig>("[wbe]\npassword = \"x\"\n").is_err());
@@ -366,8 +385,16 @@ pub async fn load_instance_dir(path: &std::path::Path) -> Option<(String, crate:
                 return None;
             }
         };
-        if let Some(bad) = repair_minecraft_version(&mut config.instance) {
+        let server_dir = if config.server.path.is_absolute() { config.server.path.clone() } else { path.join(&config.server.path) };
+        let filled = fill_loader_from_run_sh(&mut config.instance, &server_dir);
+        if filled {
+            tracing::info!("'{}': detected loader {:?} {:?}", id, config.instance.loader, config.instance.loader_version);
+        }
+        let repaired = repair_minecraft_version(&mut config.instance);
+        if let Some(bad) = &repaired {
             tracing::info!("'{}': corrected Minecraft version {} → {}", id, bad, config.instance.minecraft_version);
+        }
+        if filled || repaired.is_some() {
             if let Ok(toml_str) = toml::to_string_pretty(&config) {
                 let _ = fs::write(&msm_toml, toml_str).await;
             }
@@ -415,6 +442,7 @@ pub async fn load_instance_dir(path: &std::path::Path) -> Option<(String, crate:
             high_ram_alerted: false,
             last_deaths: std::collections::HashMap::new(),
             last_crash: None,
+            test_starting: false,
         },
     ))
 }
@@ -487,6 +515,22 @@ pub(crate) fn repair_minecraft_version(meta: &mut InstanceMeta) -> Option<String
         None => rest.to_string(),
     };
     Some(std::mem::replace(&mut meta.minecraft_version, correct))
+}
+
+/// Servers added without a loader version (Add Existing doesn't ask for one) were shared as
+/// vanilla packs. Fills loader and version in from the server's run.sh; returns whether it did.
+pub(crate) fn fill_loader_from_run_sh(meta: &mut InstanceMeta, server_dir: &std::path::Path) -> bool {
+    if meta.loader_version.is_some() {
+        return false;
+    }
+    match detect_loader_info(server_dir) {
+        Some(LoaderInfo { loader, loader_version: Some(v), .. }) => {
+            meta.loader = Some(loader);
+            meta.loader_version = Some(v);
+            true
+        }
+        _ => false,
+    }
 }
 
 struct LoaderInfo {

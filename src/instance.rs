@@ -115,7 +115,7 @@ async fn run_with_restart(
                 let r = inst.config.restart.as_ref();
                 (
                     inst.status.clone(),
-                    r.map(|r| r.auto_restart).unwrap_or(false),
+                    r.map(|r| r.auto_restart).unwrap_or(false) && !inst.test_starting,
                     r.map(|r| r.max_attempts).unwrap_or(3),
                     r.map(|r| r.delay_secs).unwrap_or(10),
                     inst.restart_attempts,
