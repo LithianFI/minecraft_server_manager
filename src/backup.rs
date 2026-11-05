@@ -610,7 +610,7 @@ async fn run_backup_scheduler(state: Arc<AppState>) {
                     if !backup.enabled {
                         return None;
                     }
-                    let schedule = backup.schedule.as_ref()?.clone();
+                    let schedule = backup.effective_schedule().to_string();
                     Some((inst.id.clone(), schedule, matches!(inst.status, InstanceStatus::Running)))
                 })
                 .collect()

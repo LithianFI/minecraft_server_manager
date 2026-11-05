@@ -281,6 +281,16 @@ pub struct BackupConfig {
     pub world_only: bool,
 }
 
+/// Used when backups are enabled without a schedule — daily at 3am
+pub const DEFAULT_BACKUP_SCHEDULE: &str = "0 3 * * *";
+
+impl BackupConfig {
+    /// The schedule backups actually run on: the configured one, or the default
+    pub fn effective_schedule(&self) -> &str {
+        self.schedule.as_deref().filter(|s| !s.trim().is_empty()).unwrap_or(DEFAULT_BACKUP_SCHEDULE)
+    }
+}
+
 pub fn data_dir() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))

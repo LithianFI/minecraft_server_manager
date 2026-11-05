@@ -1947,12 +1947,14 @@ pub async fn get_backup_config(
     let inst = instances
         .get(&id)
         .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("Instance '{}' not found", id)))?;
-    let cfg = inst.config.backup.clone().unwrap_or(BackupConfig {
+    let mut cfg = inst.config.backup.clone().unwrap_or(BackupConfig {
         enabled: false,
         schedule: None,
         keep_count: 10,
         world_only: false,
     });
+    // Show the schedule that will actually run, so an unset one isn't mistaken for a hint
+    cfg.schedule = Some(cfg.effective_schedule().to_string());
     Ok(Json(cfg))
 }
 
