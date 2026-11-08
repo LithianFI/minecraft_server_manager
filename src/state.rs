@@ -164,6 +164,9 @@ pub enum WsEvent {
     InstanceAdded {
         instance: InstanceInfo,
     },
+    InstanceRemoved {
+        instance_id: String,
+    },
     AutoRestarting {
         instance_id: String,
         attempt: u32,

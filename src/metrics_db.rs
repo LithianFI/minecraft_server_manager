@@ -286,4 +286,16 @@ impl MetricsDb {
             let _ = conn.execute("DELETE FROM player_sessions WHERE joined_at < ?1", params![older_than]);
         }
     }
+
+    /// Drops all recorded history of a deleted instance.
+    pub fn delete_instance(&self, instance_id: &str) {
+        if let Ok(conn) = self.0.conn.lock() {
+            for table in ["metrics", "server_events", "player_sessions"] {
+                let sql = format!("DELETE FROM {} WHERE instance_id = ?1", table);
+                if let Err(e) = conn.execute(&sql, params![instance_id]) {
+                    tracing::warn!("Failed to delete {} rows of '{}': {}", table, instance_id, e);
+                }
+            }
+        }
+    }
 }

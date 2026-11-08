@@ -9,6 +9,7 @@ mod distribution;
 mod files;
 mod ftb;
 mod instance;
+mod instance_admin;
 mod java;
 mod metrics;
 mod metrics_db;
@@ -118,6 +119,8 @@ async fn main() {
         .route("/events", get(sse::sse_handler))
         // API
         .route("/api/instances", get(api::list_instances).post(api::add_instance))
+        .route("/api/instances/{id}", axum::routing::delete(api::delete_instance))
+        .route("/api/instances/{id}/duplicate", post(api::duplicate_instance))
         .route("/api/instances/{id}/logs", get(api::get_logs))
         .route("/api/instances/{id}/start", post(api::start_instance))
         .route("/api/instances/{id}/stop", post(api::stop_instance))

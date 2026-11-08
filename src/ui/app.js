@@ -190,6 +190,10 @@ function handleEvent(ev) {
       break
     }
 
+    case 'instance_removed':
+      onInstanceRemoved(ev.instance_id)
+      break
+
     case 'setup_log':
       appendSetupLog(ev.message)
       break
@@ -388,6 +392,11 @@ function refreshDetail(inst) {
   btnStop.classList.toggle('hidden',  !isRunning)
   btnStart.disabled = false
   btnStop.disabled  = isBusy
+
+  // Copying or deleting a running server's files isn't safe
+  const isStopped = inst.status === 'stopped' || inst.status === 'crashed'
+  document.getElementById('btn-detail-duplicate').disabled = !isStopped
+  document.getElementById('btn-detail-delete').disabled    = !isStopped
 
   refreshPlayerBar(inst)
   refreshMetricsBar(inst)
@@ -1254,6 +1263,110 @@ async function submitAdd(e) {
     btn.disabled    = false
     btn.textContent = 'Add Instance'
   }
+}
+
+// ─── Duplicate / delete instance ─────────────────────────────────────────────
+function openDuplicateModal() {
+  const inst = instances.get(detailId)
+  if (!inst) return
+  document.getElementById('duplicate-source').textContent = inst.display_name
+  document.getElementById('duplicate-name').value = `${inst.display_name} (copy)`
+  document.getElementById('duplicate-error').classList.add('hidden')
+  updateDuplicateIdPreview()
+  document.getElementById('duplicate-modal-backdrop').classList.remove('hidden')
+  document.getElementById('duplicate-name').select()
+}
+
+function closeDuplicateModal() {
+  document.getElementById('duplicate-modal-backdrop').classList.add('hidden')
+}
+
+function updateDuplicateIdPreview() {
+  const id = slugify(document.getElementById('duplicate-name').value)
+  document.getElementById('duplicate-id-preview').textContent = id ? `ID: ${id}` : ''
+}
+
+async function submitDuplicate(e) {
+  e.preventDefault()
+  const btn     = document.getElementById('btn-duplicate-submit')
+  const errorEl = document.getElementById('duplicate-error')
+  const name    = document.getElementById('duplicate-name').value.trim()
+  btn.disabled    = true
+  btn.textContent = 'Copying…'
+  errorEl.classList.add('hidden')
+  try {
+    const inst = await api('POST', `/api/instances/${detailId}/duplicate`, { id: slugify(name), display_name: name })
+    instances.set(inst.id, inst)
+    if (!logs.has(inst.id)) logs.set(inst.id, [])
+    renderDashboard()
+    closeDuplicateModal()
+    showDetail(inst.id)
+  } catch (err) {
+    errorEl.textContent = err.message
+    errorEl.classList.remove('hidden')
+  } finally {
+    btn.disabled    = false
+    btn.textContent = 'Duplicate'
+  }
+}
+
+function openDeleteModal() {
+  const inst = instances.get(detailId)
+  if (!inst) return
+  document.getElementById('delete-name').textContent       = inst.display_name
+  document.getElementById('delete-confirm-id').textContent = inst.id
+  document.getElementById('delete-confirm').value          = ''
+  document.getElementById('delete-server-files').checked   = false
+  document.getElementById('delete-backups').checked        = false
+  document.getElementById('delete-error').classList.add('hidden')
+  updateDeleteConfirm()
+  document.getElementById('delete-modal-backdrop').classList.remove('hidden')
+  document.getElementById('delete-confirm').focus()
+}
+
+function closeDeleteModal() {
+  document.getElementById('delete-modal-backdrop').classList.add('hidden')
+}
+
+function updateDeleteConfirm() {
+  const typed = document.getElementById('delete-confirm').value.trim()
+  document.getElementById('btn-delete-submit').disabled = typed !== detailId
+}
+
+async function submitDelete(e) {
+  e.preventDefault()
+  const id = detailId
+  if (document.getElementById('delete-confirm').value.trim() !== id) return
+  const btn     = document.getElementById('btn-delete-submit')
+  const errorEl = document.getElementById('delete-error')
+  const params  = new URLSearchParams({
+    delete_server_files: document.getElementById('delete-server-files').checked,
+    delete_backups:      document.getElementById('delete-backups').checked,
+  })
+  btn.disabled    = true
+  btn.textContent = 'Deleting…'
+  errorEl.classList.add('hidden')
+  try {
+    await api('DELETE', `/api/instances/${id}?${params}`)
+    closeDeleteModal()
+    onInstanceRemoved(id)
+  } catch (err) {
+    errorEl.textContent = err.message
+    errorEl.classList.remove('hidden')
+    // A partial failure still removed the server; the event has already closed its page
+    if (!instances.has(id)) btn.disabled = true
+    else updateDeleteConfirm()
+  } finally {
+    btn.textContent = 'Delete'
+  }
+}
+
+function onInstanceRemoved(id) {
+  instances.delete(id)
+  logs.delete(id)
+  backups.delete(id)
+  if (detailId === id) showDashboard()
+  renderDashboard()
 }
 
 // ─── Backups ──────────────────────────────────────────────────────────────────

@@ -9,6 +9,8 @@ A self-hosted Minecraft server manager built in Rust. Runs a local web dashboard
 - Auto-discovery: drop a server folder into `~/.local/share/msm/instances/` and it appears automatically
 - Per-instance Java version override (useful when different modpacks need different JVM versions)
 - NeoForge / Minecraft version updater — runs the installer in-place with live progress output
+- Duplicate a stopped server — files, mods, config and world — e.g. to try a pack update on a copy first (player mod sharing starts off on the copy)
+- Delete a stopped server, optionally with its server files and backups (refuses to delete a folder another instance uses)
 
 ### Web Dashboard
 - Real-time console log with level filtering (All / Info / Warn / Error) and free-text search

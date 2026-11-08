@@ -984,6 +984,8 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   padding: 20px 24px;
 }
 
+.danger-zone .settings-section-header h4 { color: var(--red); }
+
 .settings-section-header {
   display: flex;
   align-items: baseline;

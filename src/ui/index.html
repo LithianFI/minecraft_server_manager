@@ -67,6 +67,7 @@
       <div class="topbar-right">
         <span id="detail-error" class="inline-error hidden"></span>
         <button class="btn-outline btn-sm" onclick="openUpdateModal()">Update Version</button>
+        <button id="btn-detail-duplicate" class="btn-outline btn-sm" onclick="openDuplicateModal()">Duplicate</button>
         <button id="btn-detail-start" class="btn-start hidden" onclick="detailStart()">Start</button>
         <button id="btn-detail-stop"  class="btn-stop  hidden" onclick="detailStop()">Stop</button>
       </div>
@@ -336,6 +337,17 @@
         <span id="schedules-msg" class="settings-msg hidden"></span>
       </section>
 
+      <!-- Danger Zone -->
+      <section class="settings-section danger-zone">
+        <div class="settings-section-header">
+          <h4>Danger Zone</h4>
+          <span class="settings-note">The server must be stopped</span>
+        </div>
+        <div class="settings-actions">
+          <button id="btn-detail-delete" class="btn-stop" onclick="openDeleteModal()">Delete Server…</button>
+        </div>
+      </section>
+
     </div>
   </div>
 
@@ -415,6 +427,65 @@
       <div class="modal-footer">
         <button type="button" class="btn-outline" onclick="closeAddModal()">Cancel</button>
         <button id="btn-add-submit" type="submit" class="btn-primary">Add Instance</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ══════════════════════ DUPLICATE INSTANCE MODAL ═══ -->
+<div id="duplicate-modal-backdrop" class="modal-backdrop hidden" onclick="if (event.target === event.currentTarget) closeDuplicateModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Duplicate <span id="duplicate-source"></span></h3>
+      <button class="btn-close" onclick="closeDuplicateModal()">✕</button>
+    </div>
+    <form onsubmit="submitDuplicate(event)">
+      <div class="modal-body">
+        <p class="settings-hint">Makes a full copy — server files, mods, config and world — as a new server, e.g. to test a pack update before applying it to the real one. Player mod sharing starts off on the copy.</p>
+        <div class="field">
+          <label for="duplicate-name">Display Name</label>
+          <input id="duplicate-name" type="text" required oninput="updateDuplicateIdPreview()">
+          <span id="duplicate-id-preview" class="field-hint"></span>
+        </div>
+        <div id="duplicate-error" class="error-msg hidden"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-outline" onclick="closeDuplicateModal()">Cancel</button>
+        <button id="btn-duplicate-submit" type="submit" class="btn-primary">Duplicate</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ════════════════════════ DELETE INSTANCE MODAL ═══ -->
+<div id="delete-modal-backdrop" class="modal-backdrop hidden" onclick="if (event.target === event.currentTarget) closeDeleteModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Delete <span id="delete-name"></span></h3>
+      <button class="btn-close" onclick="closeDeleteModal()">✕</button>
+    </div>
+    <form onsubmit="submitDelete(event)">
+      <div class="modal-body">
+        <p class="settings-hint">Removes the server from MSM, along with its settings and stats history.</p>
+        <div class="props-form">
+          <label class="prop-row prop-row-check">
+            <span class="prop-label">Also delete server files and world</span>
+            <input type="checkbox" id="delete-server-files">
+          </label>
+          <label class="prop-row prop-row-check">
+            <span class="prop-label">Also delete backups</span>
+            <input type="checkbox" id="delete-backups">
+          </label>
+        </div>
+        <div class="field">
+          <label for="delete-confirm">Type <code id="delete-confirm-id"></code> to confirm</label>
+          <input id="delete-confirm" type="text" autocomplete="off" oninput="updateDeleteConfirm()">
+        </div>
+        <div id="delete-error" class="error-msg hidden"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-outline" onclick="closeDeleteModal()">Cancel</button>
+        <button id="btn-delete-submit" type="submit" class="btn-stop" disabled>Delete</button>
       </div>
     </form>
   </div>

@@ -14,7 +14,7 @@ use crate::{
     config::{data_dir, BackupConfig, DiscordNotifyConfig, InstanceConfig, InstanceMeta, RestartConfig, ServerConfig},
     datapack_mgr,
     datapack_mgr::{DatapackEntry, DatapackSearchHit, DatapackUpdate},
-    ftb, instance, mod_mgr, modpack, setup, whitelist,
+    ftb, instance, instance_admin, mod_mgr, modpack, setup, whitelist,
     mod_mgr::{ModEntry, ModSearchHit, ModUpdate},
     whitelist::WhitelistEntry,
     state::{AppState, InstanceInfo, InstanceState, InstanceStatus, LogLine, WsEvent},
@@ -260,6 +260,52 @@ pub async fn add_instance(
     }
 
     Ok(Json(info))
+}
+
+#[derive(Deserialize)]
+pub struct DuplicateRequest {
+    pub id: String,
+    pub display_name: String,
+}
+
+pub async fn duplicate_instance(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<DuplicateRequest>,
+) -> ApiResult<Json<InstanceInfo>> {
+    let new_id = slugify(&req.id);
+    if new_id.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid instance ID"));
+    }
+    let display_name = req.display_name.trim();
+    let display_name = if display_name.is_empty() { new_id.as_str() } else { display_name };
+    instance_admin::duplicate(&state, &id, &new_id, display_name)
+        .await
+        .map(Json)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))
+}
+
+#[derive(Deserialize, Default)]
+pub struct DeleteInstanceQuery {
+    #[serde(default)]
+    pub delete_server_files: bool,
+    #[serde(default)]
+    pub delete_backups: bool,
+}
+
+pub async fn delete_instance(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(q): Query<DeleteInstanceQuery>,
+) -> ApiResult<StatusCode> {
+    let opts = instance_admin::DeleteOptions {
+        delete_server_files: q.delete_server_files,
+        delete_backups: q.delete_backups,
+    };
+    instance_admin::delete(&state, &id, opts)
+        .await
+        .map(|_| StatusCode::NO_CONTENT)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))
 }
 
 pub async fn list_backups(
